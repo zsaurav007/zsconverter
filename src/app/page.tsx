@@ -31,35 +31,57 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 text-slate-900 font-sans p-6 md:p-12">
-      <div className="max-w-6xl mx-auto space-y-8">
-        <header className="text-center space-y-6">
-          <div>
-            <h1 className="text-3xl font-light tracking-widest text-slate-700">ZS CONVERTER</h1>
-            <p className="text-sm text-slate-500 max-w-lg mx-auto mt-2">
+    <main className="min-h-screen bg-slate-50 text-slate-900 font-sans p-4 sm:p-6 md:p-12">
+      <div className="max-w-6xl mx-auto space-y-6 sm:space-y-8">
+        
+        <header className="text-center space-y-4 sm:space-y-6">
+          <div className="px-2">
+            <h1 className="text-2xl sm:text-3xl font-light tracking-widest text-slate-700">ZS CONVERTER</h1>
+            <p className="text-xs sm:text-sm text-slate-500 max-w-lg mx-auto mt-2">
               A fast, private, browser-based toolkit. Developed by Zulkarnain Saurav (+8801615201545)
             </p>
           </div>
 
-          <div className="inline-flex bg-slate-200/50 p-1 rounded-lg flex-wrap justify-center gap-1 max-w-full">
-            <button onClick={() => setAppMode('image')} className={`px-4 py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'image' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-              Single Image
-            </button>
-            <button onClick={() => setAppMode('batch')} className={`px-4 py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'batch' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-              Batch Processor
-            </button>
-            <button onClick={() => setAppMode('pdf')} className={`px-4 py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'pdf' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-              PDF Tools
-            </button>
-            <button onClick={() => setAppMode('ai')} className={`px-4 py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'ai' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-              AI Converter
-            </button>
-            <button onClick={() => setAppMode('palette')} className={`px-4 py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'palette' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-              Color Palette
-            </button>
-            <button onClick={() => setAppMode('qr')} className={`px-4 py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'qr' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-              QR Code
-            </button>
+          {/* Responsive Nav Bar: Scrollable horizontally on mobile, wrapped/centered on desktop */}
+          <div className="relative w-full max-w-full mx-auto">
+            <div className="flex sm:inline-flex flex-nowrap sm:flex-wrap justify-start sm:justify-center bg-slate-200/50 p-1 rounded-lg gap-1 overflow-x-auto max-w-full scroll-smooth w-full sm:w-auto shadow-inner">
+              <button 
+                onClick={() => setAppMode('image')} 
+                className={`flex-shrink-0 px-4 py-2.5 sm:py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'image' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                Single Image
+              </button>
+              <button 
+                onClick={() => setAppMode('batch')} 
+                className={`flex-shrink-0 px-4 py-2.5 sm:py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'batch' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                Batch Processor
+              </button>
+              <button 
+                onClick={() => setAppMode('pdf')} 
+                className={`flex-shrink-0 px-4 py-2.5 sm:py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'pdf' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                PDF Tools
+              </button>
+              <button 
+                onClick={() => setAppMode('ai')} 
+                className={`flex-shrink-0 px-4 py-2.5 sm:py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'ai' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                AI Converter
+              </button>
+              <button 
+                onClick={() => setAppMode('palette')} 
+                className={`flex-shrink-0 px-4 py-2.5 sm:py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'palette' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                Color Palette
+              </button>
+              <button 
+                onClick={() => setAppMode('qr')} 
+                className={`flex-shrink-0 px-4 py-2.5 sm:py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'qr' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                QR Code
+              </button>
+            </div>
           </div>
         </header>
 

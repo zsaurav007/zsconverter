@@ -5,7 +5,7 @@ import ReactCrop, { Crop } from 'react-image-crop'
 import 'react-image-crop/dist/ReactCrop.css'
 import { removeBackground, Config } from '@imgly/background-removal'
 import { jsPDF } from 'jspdf'
-import { Crop as CropIcon, Eraser, Download, Settings2, Image as ImageIcon, Palette, Type, X, Undo2, Sparkles, Wand2 } from 'lucide-react'
+import { Crop as CropIcon, Eraser, Download, Settings2, Image as ImageIcon, Palette, Type, X, Undo2, Sparkles, Wand2, RotateCw, FlipHorizontal, FlipVertical, Square } from 'lucide-react'
 import CustomDropdown from './CustomDropdown'
 
 const createImage = (url: string): Promise<HTMLImageElement> =>
@@ -51,20 +51,30 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
   const currentImage = history[history.length - 1] 
   const canUndo = history.length > 1
   
-  const [activeTool, setActiveTool] = useState<'crop' | 'bg' | 'enhance' | null>(null)
+  const [activeTool, setActiveTool] = useState<'crop' | 'bg' | 'enhance' | 'transform' | null>(null)
   
+  // Base Name for Exporting
+  const baseName = file.name.substring(0, file.name.lastIndexOf('.')) || file.name
+
+  // Transform State
+  const [liveTransform, setLiveTransform] = useState({ rotate: 0, flipH: false, flipV: false, radius: 0 })
+
+  // Crop State
   const [crop, setCrop] = useState<Crop>({ unit: '%', width: 100, height: 100, x: 0, y: 0 })
   const imgRef = useRef<HTMLImageElement>(null)
 
+  // Background State
   const [isRemovingBg, setIsRemovingBg] = useState(false)
   const [selectedModel, setSelectedModel] = useState('isnet_fp16')
   const [bgType, setBgType] = useState<'transparent' | 'color' | 'image'>('transparent')
   const [bgColor, setBgColor] = useState('#ffffff')
   const [bgImage, setBgImage] = useState<string | null>(null)
 
+  // Enhance State
   const defaultFilters = { b: 100, c: 100, s: 100, sep: 0 }
   const [liveFilters, setLiveFilters] = useState(defaultFilters)
 
+  // Export State
   const [exportFormat, setExportFormat] = useState<string>('image/png')
   const [compressionQuality, setCompressionQuality] = useState<number>(90)
 
@@ -83,6 +93,43 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
     } finally {
       setIsRemovingBg(false)
     }
+  }
+
+  const handleApplyTransform = async () => {
+    const img = await createImage(currentImage)
+    const canvas = document.createElement('canvas')
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    const isRotated = liveTransform.rotate % 180 !== 0
+    canvas.width = isRotated ? img.height : img.width
+    canvas.height = isRotated ? img.width : img.height
+
+    // Apply Legacy-Safe Corner Radius Clipping
+    if (liveTransform.radius > 0) {
+      const r = (Math.min(canvas.width, canvas.height) / 2) * (liveTransform.radius / 50)
+      ctx.beginPath()
+      ctx.moveTo(r, 0)
+      ctx.lineTo(canvas.width - r, 0)
+      ctx.quadraticCurveTo(canvas.width, 0, canvas.width, r)
+      ctx.lineTo(canvas.width, canvas.height - r)
+      ctx.quadraticCurveTo(canvas.width, canvas.height, canvas.width - r, canvas.height)
+      ctx.lineTo(r, canvas.height)
+      ctx.quadraticCurveTo(0, canvas.height, 0, canvas.height - r)
+      ctx.lineTo(0, r)
+      ctx.quadraticCurveTo(0, 0, r, 0)
+      ctx.closePath()
+      ctx.clip()
+    }
+
+    ctx.translate(canvas.width / 2, canvas.height / 2)
+    ctx.rotate((liveTransform.rotate * Math.PI) / 180)
+    ctx.scale(liveTransform.flipH ? -1 : 1, liveTransform.flipV ? -1 : 1)
+    ctx.drawImage(img, -img.width / 2, -img.height / 2, img.width, img.height)
+
+    pushToGlobalHistory(canvas.toDataURL('image/png'))
+    setActiveTool(null)
+    setLiveTransform({ rotate: 0, flipH: false, flipV: false, radius: 0 })
   }
 
   const handleApplyCrop = async () => {
@@ -142,7 +189,7 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
     if (exportFormat === 'application/pdf') {
       const pdf = new jsPDF({ orientation: img.width > img.height ? 'landscape' : 'portrait', unit: 'px', format: [img.width, img.height] })
       pdf.addImage(currentImage, 'PNG', 0, 0, img.width, img.height)
-      pdf.save('zsconverter-output.pdf')
+      pdf.save(`${baseName}_zs_converter.pdf`)
       onComplete(currentImage)
       return
     }
@@ -171,33 +218,27 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
       const pngBuffer = await pngBlob.arrayBuffer()
       const pngBytes = new Uint8Array(pngBuffer)
 
-      // Build ICO binary structure (6-byte header + 16-byte directory entry + PNG data)
       const icoBuffer = new ArrayBuffer(22 + pngBytes.length)
       const view = new DataView(icoBuffer)
 
-      // ICO Header
-      view.setUint16(0, 0, true) // Reserved
-      view.setUint16(2, 1, true) // Type: 1 for ICO
-      view.setUint16(4, 1, true) // Number of images: 1
-
-      // ICO Directory Entry
-      view.setUint8(6, 32) // Width
-      view.setUint8(7, 32) // Height
-      view.setUint8(8, 0)  // Color palette count
-      view.setUint8(9, 0)  // Reserved
-      view.setUint16(10, 1, true)  // Color planes
-      view.setUint16(12, 32, true) // Bits per pixel
-      view.setUint32(14, pngBytes.length, true) // Size of image data
-      view.setUint32(18, 22, true) // Data offset
-
-      // Write PNG payload
+      view.setUint16(0, 0, true)
+      view.setUint16(2, 1, true)
+      view.setUint16(4, 1, true)
+      view.setUint8(6, 32)
+      view.setUint8(7, 32)
+      view.setUint8(8, 0)
+      view.setUint8(9, 0)
+      view.setUint16(10, 1, true)
+      view.setUint16(12, 32, true)
+      view.setUint32(14, pngBytes.length, true)
+      view.setUint32(18, 22, true)
       new Uint8Array(icoBuffer, 22).set(pngBytes)
 
       const icoBlob = new Blob([icoBuffer], { type: 'image/x-icon' })
       const finalUrl = URL.createObjectURL(icoBlob)
       const link = document.createElement('a')
       link.href = finalUrl
-      link.download = `zsconverter-favicon-${Date.now()}.ico`
+      link.download = `${baseName}_zs_converter.ico`
       link.click()
       
       onComplete(finalUrl)
@@ -229,7 +270,7 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
     const link = document.createElement('a')
     link.href = finalUrl
     const ext = mimeType.split('/')[1]
-    link.download = `zsconverter-output.${ext}`
+    link.download = `${baseName}_zs_converter.${ext}`
     link.click()
     
     onComplete(finalUrl)
@@ -238,15 +279,20 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
   const isLosslessFormat = exportFormat === 'image/png' || exportFormat === 'image/webp-lossless' || exportFormat === 'application/pdf' || exportFormat === 'image/x-icon'
   const sourceFormatDisplay = file.type.split('/')[1]?.toUpperCase() || 'UNKNOWN'
 
-  const filterStyle = activeTool === 'enhance' 
-    ? { filter: `brightness(${liveFilters.b}%) contrast(${liveFilters.c}%) saturate(${liveFilters.s}%) sepia(${liveFilters.sep}%)` }
-    : {}
+  // Combine Active Tool Preview Styles
+  const previewStyle = {
+    ...(activeTool === 'enhance' ? { filter: `brightness(${liveFilters.b}%) contrast(${liveFilters.c}%) saturate(${liveFilters.s}%) sepia(${liveFilters.sep}%)` } : {}),
+    ...(activeTool === 'transform' ? { 
+      transform: `rotate(${liveTransform.rotate}deg) scaleX(${liveTransform.flipH ? -1 : 1}) scaleY(${liveTransform.flipV ? -1 : 1})`,
+      borderRadius: `${liveTransform.radius}%`
+    } : {})
+  }
 
   return (
-    <div className="bg-white w-full rounded-xl border border-slate-200 shadow-sm p-6 flex flex-col md:flex-row gap-8 h-[650px]">
+    <div className="bg-white w-full rounded-xl border border-slate-200 shadow-sm flex flex-col lg:flex-row h-auto lg:h-[650px] min-h-[650px] overflow-hidden">
       
       {/* Dynamic Preview Area */}
-      <div className="flex-1 bg-slate-100 rounded-lg p-4 flex items-center justify-center h-full overflow-hidden relative group">
+      <div className="flex-1 bg-slate-100 p-4 flex items-center justify-center relative group min-h-[400px] lg:min-h-full order-1 lg:order-2 overflow-hidden">
         <button onClick={onCancel} className="absolute top-3 right-3 z-50 bg-white/90 text-slate-800 p-2 rounded-full shadow-md hover:bg-red-500 hover:text-white transition-colors" title="Close Image">
           <X className="w-5 h-5" />
         </button>
@@ -256,16 +302,16 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
         <div className="relative z-10 w-full h-full flex items-center justify-center p-2">
           {activeTool === 'crop' ? (
             <ReactCrop crop={crop} onChange={c => setCrop(c)} className="max-w-full max-h-full flex items-center justify-center">
-              <img ref={imgRef} src={currentImage} alt="Crop Preview" className="max-w-full max-h-full object-contain" style={filterStyle} />
+              <img ref={imgRef} src={currentImage} alt="Crop Preview" className="max-w-full max-h-full object-contain" style={previewStyle} />
             </ReactCrop>
           ) : (
-            <img src={currentImage} alt="Workspace" className="max-w-full max-h-full object-contain drop-shadow-md transition-all" style={filterStyle} />
+            <img src={currentImage} alt="Workspace" className="max-w-full max-h-full object-contain drop-shadow-md transition-all" style={previewStyle} />
           )}
         </div>
       </div>
 
       {/* Toolbar Sidebar */}
-      <div className="w-full md:w-80 h-full flex flex-col gap-4 overflow-y-auto pr-2 pb-2">
+      <div className="w-full lg:w-80 h-auto lg:h-full flex flex-col gap-4 overflow-y-auto p-4 lg:p-6 bg-slate-50 border-b lg:border-b-0 lg:border-r border-slate-200 order-2 lg:order-1">
         <div className="flex justify-between items-center border-b border-slate-200 pb-2 flex-shrink-0">
           <h4 className="text-xs font-bold text-slate-800 uppercase tracking-widest flex items-center gap-2"><Settings2 className="w-4 h-4" /> Tools</h4>
           <button onClick={handleUndo} disabled={!canUndo} className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-widest text-slate-500 hover:text-[#6384A3] disabled:opacity-30 transition-colors">
@@ -274,7 +320,7 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
         </div>
         
         {/* Background Tool */}
-        <div className="border border-slate-200 rounded-lg overflow-hidden flex-shrink-0">
+        <div className="border border-slate-200 rounded-lg overflow-hidden flex-shrink-0 bg-white">
           <button onClick={() => setActiveTool(activeTool === 'bg' ? null : 'bg')} className="w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors">
             <Eraser className="w-4 h-4 text-[#6384A3]" /> Background Studio
           </button>
@@ -308,9 +354,42 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
             </div>
           )}
         </div>
+
+        {/* Transform & Shape Tool */}
+        <div className="border border-slate-200 rounded-lg overflow-hidden flex-shrink-0 bg-white">
+          <button onClick={() => setActiveTool(activeTool === 'transform' ? null : 'transform')} className="w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors">
+            <RotateCw className="w-4 h-4 text-[#6384A3]" /> Transform & Shape
+          </button>
+          {activeTool === 'transform' && (
+            <div className="p-4 bg-white border-t border-slate-100 space-y-4">
+              <div className="grid grid-cols-3 gap-2">
+                <button onClick={() => setLiveTransform(prev => ({ ...prev, rotate: (prev.rotate + 90) % 360 }))} className="py-2 bg-slate-50 border border-slate-200 rounded text-[10px] font-bold uppercase tracking-widest text-slate-600 hover:bg-slate-100 flex flex-col items-center gap-1">
+                  <RotateCw className="w-4 h-4 text-[#6384A3]" /> Rotate
+                </button>
+                <button onClick={() => setLiveTransform(prev => ({ ...prev, flipH: !prev.flipH }))} className="py-2 bg-slate-50 border border-slate-200 rounded text-[10px] font-bold uppercase tracking-widest text-slate-600 hover:bg-slate-100 flex flex-col items-center gap-1">
+                  <FlipHorizontal className="w-4 h-4 text-[#6384A3]" /> Mirror
+                </button>
+                <button onClick={() => setLiveTransform(prev => ({ ...prev, flipV: !prev.flipV }))} className="py-2 bg-slate-50 border border-slate-200 rounded text-[10px] font-bold uppercase tracking-widest text-slate-600 hover:bg-slate-100 flex flex-col items-center gap-1">
+                  <FlipVertical className="w-4 h-4 text-[#6384A3]" /> Flip
+                </button>
+              </div>
+              <div className="space-y-2 pt-2">
+                <div className="flex justify-between items-center text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                  <span className="flex items-center gap-1"><Square className="w-3 h-3" /> Corner Radius</span>
+                  <span className="text-[#6384A3]">{liveTransform.radius}%</span>
+                </div>
+                <input type="range" min="0" max="50" value={liveTransform.radius} onChange={(e) => setLiveTransform({...liveTransform, radius: Number(e.target.value)})} className="w-full accent-[#6384A3]" />
+              </div>
+              <div className="flex gap-2 pt-2">
+                <button onClick={() => { setActiveTool(null); setLiveTransform({ rotate: 0, flipH: false, flipV: false, radius: 0 }); }} className="flex-1 py-2 text-xs font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50">Cancel</button>
+                <button onClick={handleApplyTransform} className="flex-1 py-2 text-xs font-bold text-white bg-[#6384A3] rounded hover:bg-[#4f6a83]">Apply</button>
+              </div>
+            </div>
+          )}
+        </div>
         
         {/* Crop Tool */}
-        <div className="border border-slate-200 rounded-lg overflow-hidden flex-shrink-0">
+        <div className="border border-slate-200 rounded-lg overflow-hidden flex-shrink-0 bg-white">
           <button onClick={() => setActiveTool(activeTool === 'crop' ? null : 'crop')} className="w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors">
             <CropIcon className="w-4 h-4 text-[#6384A3]" /> Freehand Crop
           </button>
@@ -326,7 +405,7 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
         </div>
 
         {/* Enhance Tool */}
-        <div className="border border-slate-200 rounded-lg overflow-hidden flex-shrink-0">
+        <div className="border border-slate-200 rounded-lg overflow-hidden flex-shrink-0 bg-white">
           <button onClick={() => setActiveTool(activeTool === 'enhance' ? null : 'enhance')} className="w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors">
             <Sparkles className="w-4 h-4 text-[#6384A3]" /> Enhance Photo
           </button>
@@ -364,7 +443,7 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
         </div>
 
         {/* Inline Export & Conversion */}
-        <div className="mt-auto border border-slate-200 rounded-lg bg-slate-50 p-4 space-y-4 flex-shrink-0">
+        <div className="mt-auto border border-slate-200 rounded-lg bg-white p-4 space-y-4 flex-shrink-0">
           <h4 className="text-xs font-bold text-slate-800 uppercase tracking-widest flex items-center gap-2"><Type className="w-4 h-4 text-[#6384A3]"/> Conversion & Export</h4>
           <div className="space-y-2">
              <div className="flex justify-between items-center text-xs">

@@ -48,20 +48,20 @@ function SortablePageItem({ id, url, index, rotation, onRemove, onRotate }: Sort
         />
       </div>
       
-      <div className="absolute top-2 right-2 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+      <div className="absolute top-2 right-2 flex flex-col gap-2 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity z-10">
         <button 
           onPointerDown={(e) => { e.stopPropagation(); onRemove(id) }}
-          className="bg-red-500/90 hover:bg-red-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs shadow-md transition-colors"
+          className="bg-red-500/90 hover:bg-red-600 text-white rounded-full w-7 h-7 lg:w-6 lg:h-6 flex items-center justify-center shadow-md transition-colors"
           title="Delete Page"
         >
-          <X className="w-3.5 h-3.5" />
+          <X className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
         </button>
         <button 
           onPointerDown={(e) => { e.stopPropagation(); onRotate(id) }}
-          className="bg-slate-800/90 hover:bg-black text-white rounded-full w-6 h-6 flex items-center justify-center text-xs shadow-md transition-colors"
+          className="bg-slate-800/90 hover:bg-black text-white rounded-full w-7 h-7 lg:w-6 lg:h-6 flex items-center justify-center shadow-md transition-colors"
           title="Rotate 90°"
         >
-          <RotateCw className="w-3.5 h-3.5" />
+          <RotateCw className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
         </button>
       </div>
 
@@ -80,6 +80,9 @@ export default function PdfEditor() {
   const [isProcessing, setIsProcessing] = useState(false)
   const [loadingText, setLoadingText] = useState('')
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  
+  // File Naming State
+  const [originalDocName, setOriginalDocName] = useState('document')
 
   const [activePanel, setActivePanel] = useState<'security' | 'watermark' | 'compression' | null>(null)
 
@@ -97,9 +100,13 @@ export default function PdfEditor() {
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      // DYNAMICALLY IMPORT PDF.JS TO BYPASS BUILD ERRORS
       import('pdfjs-dist').then((pdfjsLib) => {
-        pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`
+        // Smart feature detection for older browsers (Windows 7 / Legacy support)
+        const isModernBrowser = 'noModule' in HTMLScriptElement.prototype
+        
+        pdfjsLib.GlobalWorkerOptions.workerSrc = isModernBrowser 
+          ? `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`
+          : `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/legacy/build/pdf.worker.min.js`
       })
     }
   }, [])
@@ -107,6 +114,13 @@ export default function PdfEditor() {
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return
     setIsProcessing(true)
+
+    // Capture the original filename for export
+    if (!originalDocName || originalDocName === 'document') {
+      const firstFileName = acceptedFiles[0].name
+      const baseName = firstFileName.substring(0, firstFileName.lastIndexOf('.')) || firstFileName
+      setOriginalDocName(baseName)
+    }
     
     try {
       const newPages: PageItem[] = []
@@ -115,8 +129,6 @@ export default function PdfEditor() {
         if (file.type === 'application/pdf') {
           setLoadingText('Extracting PDF pages...')
           const arrayBuffer = await file.arrayBuffer()
-          
-          // DYNAMICALLY IMPORT PDF.JS
           const pdfjsLib = await import('pdfjs-dist')
           
           let pdf;
@@ -163,12 +175,12 @@ export default function PdfEditor() {
       setPages(prev => [...prev, ...newPages])
       setUnlockPassword('')
     } catch (error) {
-      alert("Failed to process the file.")
+      alert("Failed to process the file. It may be corrupted or highly encrypted.")
     } finally {
       setIsProcessing(false)
       setLoadingText('')
     }
-  }, [unlockPassword])
+  }, [unlockPassword, originalDocName])
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -190,7 +202,10 @@ export default function PdfEditor() {
   const rotatePage = (idToRotate: string) => {
     setPages(items => items.map(item => item.id === idToRotate ? { ...item, rotation: (item.rotation + 90) % 360 } : item))
   }
-  const clearAll = () => setPages([])
+  const clearAll = () => {
+    setPages([])
+    setOriginalDocName('document')
+  }
 
   const generatePdfBlob = async (): Promise<Blob | null> => {
     if (pages.length === 0) return null
@@ -294,7 +309,7 @@ export default function PdfEditor() {
         const url = URL.createObjectURL(blob)
         const link = document.createElement('a')
         link.href = url
-        link.download = `zsconverter-document-${Date.now()}.pdf`
+        link.download = `${originalDocName}_zs_converter.pdf`
         link.click()
       }
     } catch (e) {
@@ -320,7 +335,7 @@ export default function PdfEditor() {
       const downloadUrl = URL.createObjectURL(zipContent)
       const link = document.createElement('a')
       link.href = downloadUrl
-      link.download = `zsconverter-extracted-pages-${Date.now()}.zip`
+      link.download = `${originalDocName}_zs_converter_pages.zip`
       link.click()
     } catch (error) {
       alert("Failed to export images.")
@@ -332,10 +347,10 @@ export default function PdfEditor() {
 
   return (
     <>
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col md:flex-row h-[650px]">
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col lg:flex-row h-auto lg:h-[650px] min-h-[650px]">
         
         {/* Sidebar Settings */}
-        <div className="w-full md:w-80 h-full flex flex-col gap-4 overflow-y-auto pr-2 pb-2 p-6 bg-slate-50 border-r border-slate-200">
+        <div className="w-full lg:w-80 h-auto lg:h-full flex flex-col gap-4 overflow-y-auto p-4 lg:p-6 bg-slate-50 border-b lg:border-b-0 lg:border-r border-slate-200 order-2 lg:order-1">
           <div className="flex justify-between items-center border-b border-slate-200 pb-2 flex-shrink-0">
             <h4 className="text-xs font-bold text-slate-800 uppercase tracking-widest flex items-center gap-2">
               <Settings2 className="w-4 h-4" /> Doc Settings
@@ -433,7 +448,7 @@ export default function PdfEditor() {
 
           {/* Export Actions */}
           <div className="mt-auto pt-4 border-t border-slate-200 flex-shrink-0 space-y-3">
-            <button onClick={handlePreview} disabled={isProcessing || pages.length === 0} className="w-full py-2.5 border border-slate-200 bg-white text-slate-700 font-bold text-xs uppercase tracking-widest rounded-lg hover:bg-slate-100 disabled:opacity-50 transition-colors flex items-center justify-center gap-2 shadow-sm">
+            <button onClick={handlePreview} disabled={isProcessing || pages.length === 0} className="w-full py-3 lg:py-2.5 border border-slate-200 bg-white text-slate-700 font-bold text-xs uppercase tracking-widest rounded-lg hover:bg-slate-100 disabled:opacity-50 transition-colors flex items-center justify-center gap-2 shadow-sm">
               <Eye className="w-4 h-4" /> Preview Doc
             </button>
             <div className="flex gap-2">
@@ -448,8 +463,8 @@ export default function PdfEditor() {
         </div>
 
         {/* Main Grid Area */}
-        <div className="flex-1 p-6 md:p-8 bg-white flex flex-col relative h-full">
-          <div className="flex justify-between items-center mb-6 border-b border-slate-100 pb-2 flex-shrink-0">
+        <div className="flex-1 p-4 lg:p-8 bg-white flex flex-col relative min-h-[400px] lg:h-full order-1 lg:order-2">
+          <div className="flex justify-between items-center mb-4 lg:mb-6 border-b border-slate-100 pb-2 flex-shrink-0">
             <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">
               {pages.length} {pages.length === 1 ? 'Page' : 'Pages'} Loaded
             </span>
@@ -461,17 +476,17 @@ export default function PdfEditor() {
           </div>
 
           {pages.length === 0 ? (
-            <div {...getRootProps()} className={`flex-1 flex flex-col items-center justify-center border-2 border-dashed rounded-xl cursor-pointer transition-colors ${isDragActive ? 'border-[#6384A3] bg-blue-50/50' : 'border-slate-200 hover:border-[#6384A3] hover:bg-slate-50'}`}>
+            <div {...getRootProps()} className={`flex-1 flex flex-col items-center justify-center border-2 border-dashed rounded-xl cursor-pointer transition-colors p-6 text-center ${isDragActive ? 'border-[#6384A3] bg-blue-50/50' : 'border-slate-200 hover:border-[#6384A3] hover:bg-slate-50'}`}>
               <input {...getInputProps()} />
-              <FileText className="w-12 h-12 mb-4 text-slate-300" />
+              <FileText className="w-10 h-10 lg:w-12 lg:h-12 mb-4 text-slate-300" />
               <p className="text-sm font-bold text-slate-700">Drag & drop PDFs or Images here</p>
-              <p className="text-xs text-slate-500 mt-1">or click to browse</p>
+              <p className="text-xs text-slate-500 mt-1">or tap to browse</p>
             </div>
           ) : (
             <div className="flex-1 overflow-y-auto pr-2">
               <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
                 <SortableContext items={pages.map(p => p.id)} strategy={rectSortingStrategy}>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-6 pb-6">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 lg:gap-6 pb-6">
                     {pages.map((page, index) => (
                       <SortablePageItem 
                         key={page.id} 
@@ -518,7 +533,7 @@ export default function PdfEditor() {
               <X className="w-5 h-5" />
             </button>
           </div>
-          <div className="flex-1 p-4 md:p-8 flex justify-center">
+          <div className="flex-1 p-2 md:p-8 flex justify-center">
             <iframe src={previewUrl} className="w-full max-w-4xl h-full rounded shadow-2xl bg-white" title="PDF Preview" />
           </div>
         </div>

@@ -121,7 +121,7 @@ export default function BatchProcessor() {
         if (blob) {
           const originalName = file.name.substring(0, file.name.lastIndexOf('.')) || file.name
           const extension = mimeType.split('/')[1]
-          zip.file(`${originalName}-processed.${extension}`, blob)
+          zip.file(`${originalName}_zs_converter.${extension}`, blob)
         }
         
         URL.revokeObjectURL(url)
@@ -132,7 +132,7 @@ export default function BatchProcessor() {
       const downloadUrl = URL.createObjectURL(zipContent)
       const link = document.createElement('a')
       link.href = downloadUrl
-      link.download = `zsconverter-batch-${Date.now()}.zip`
+      link.download = `batch_${Date.now()}_zs_converter.zip`
       link.click()
 
     } catch (error) {
@@ -146,10 +146,10 @@ export default function BatchProcessor() {
   const isLosslessFormat = exportFormat === 'image/png' || exportFormat === 'image/webp-lossless'
 
   return (
-    <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col md:flex-row h-[650px]">
+    <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col lg:flex-row h-auto lg:h-[650px] min-h-[650px]">
       
       {/* Settings Panel */}
-      <div className="w-full md:w-80 h-full bg-slate-50 p-6 border-r border-slate-200 flex flex-col gap-6 overflow-y-auto pb-2">
+      <div className="w-full lg:w-80 h-auto lg:h-full bg-slate-50 p-4 lg:p-6 border-t lg:border-t-0 border-b lg:border-b-0 lg:border-r border-slate-200 flex flex-col gap-4 lg:gap-6 overflow-y-auto order-2 lg:order-1">
         <h3 className="text-xs font-bold text-slate-800 uppercase tracking-widest border-b pb-4 flex items-center gap-2 flex-shrink-0">
           <Settings2 className="w-4 h-4"/> Batch Pipeline
         </h3>
@@ -217,32 +217,37 @@ export default function BatchProcessor() {
       </div>
 
       {/* Dropzone & Queue */}
-      <div className="flex-1 p-6 md:p-8 flex flex-col relative h-full">
+      <div className="flex-1 p-4 lg:p-8 flex flex-col relative min-h-[400px] lg:min-h-full order-1 lg:order-2">
         {files.length > 0 && !isProcessing && (
-          <button onClick={clearAll} className="absolute top-4 right-4 z-10 bg-white border border-red-200 text-red-500 hover:bg-red-50 hover:border-red-300 px-3 py-1.5 rounded-md text-xs font-bold flex items-center gap-2 transition-colors shadow-sm">
-            <Trash2 className="w-3.5 h-3.5" /> Clear Queue
+          <button onClick={clearAll} className="absolute top-2 lg:top-4 right-2 lg:right-4 z-10 bg-white border border-red-200 text-red-500 hover:bg-red-50 hover:border-red-300 px-3 py-1.5 rounded-md text-xs font-bold flex items-center gap-2 transition-colors shadow-sm">
+            <Trash2 className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Clear Queue</span>
           </button>
         )}
 
-        <div {...getRootProps()} className={`border-2 border-dashed rounded-xl p-8 mb-6 flex flex-col items-center justify-center text-center cursor-pointer transition-colors ${isDragActive ? 'border-[#6384A3] bg-blue-50/50' : 'border-slate-300 hover:border-[#6384A3] hover:bg-slate-100/50'} ${isProcessing ? 'pointer-events-none opacity-50' : ''}`}>
+        <div {...getRootProps()} className={`border-2 border-dashed rounded-xl p-6 lg:p-8 mb-4 lg:mb-6 flex flex-col items-center justify-center text-center cursor-pointer transition-colors ${isDragActive ? 'border-[#6384A3] bg-blue-50/50' : 'border-slate-300 hover:border-[#6384A3] hover:bg-slate-100/50'} ${isProcessing ? 'pointer-events-none opacity-50' : ''}`}>
           <input {...getInputProps()} />
-          <UploadCloud className={`w-8 h-8 mb-3 ${isDragActive ? 'text-[#6384A3]' : 'text-slate-400'}`} />
-          <h3 className="text-lg font-bold text-slate-700 mb-1">Add Images to Batch</h3>
-          <p className="text-xs text-slate-500">Drag & drop multiple files, or click to browse</p>
+          <UploadCloud className={`w-8 h-8 lg:w-10 lg:h-10 mb-3 ${isDragActive ? 'text-[#6384A3]' : 'text-slate-400'}`} />
+          <h3 className="text-base lg:text-lg font-bold text-slate-700 mb-1">Add Images to Batch</h3>
+          <p className="text-xs text-slate-500">Drag & drop files, or tap to browse</p>
         </div>
 
         {files.length > 0 && (
-          <div className="flex-1 bg-white border border-slate-200 rounded-lg p-4 overflow-y-auto">
-            <div className="flex justify-between items-center mb-4 border-b pb-2">
+          <div className="flex-1 bg-white border border-slate-200 rounded-lg p-3 lg:p-4 overflow-y-auto">
+            <div className="flex justify-between items-center mb-3 lg:mb-4 border-b pb-2">
               <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">{files.length} Files Queued</span>
             </div>
             
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 lg:gap-4">
               {files.map((file, index) => (
                 <div key={`${file.name}-${index}`} className="relative group rounded-lg overflow-hidden border border-slate-200 aspect-square bg-slate-50 flex items-center justify-center">
                   <img src={URL.createObjectURL(file)} alt="Preview" className="w-full h-full object-cover" />
                   {!isProcessing && (
-                    <button onClick={() => removeFile(index)} className="absolute top-2 right-2 bg-red-500/90 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs shadow-md opacity-0 group-hover:opacity-100 transition-opacity">×</button>
+                    <button 
+                      onClick={() => removeFile(index)} 
+                      className="absolute top-2 right-2 bg-red-500/90 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs shadow-md opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity"
+                    >
+                      ×
+                    </button>
                   )}
                   <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-white text-[10px] p-1.5 truncate text-center font-semibold flex justify-between px-2">
                     <span className="truncate pr-2">{file.name}</span>

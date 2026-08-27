@@ -17,9 +17,13 @@ export default function AiConverter() {
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      // DYNAMICALLY IMPORT PDF.JS TO BYPASS DOMMatrix SSR BUILD CRASHES
+      // Dynamically import PDF.js to bypass DOMMatrix SSR build crashes and support legacy browsers
       import('pdfjs-dist').then((pdfjsLib) => {
-        pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`
+        const isModernBrowser = 'noModule' in HTMLScriptElement.prototype
+        
+        pdfjsLib.GlobalWorkerOptions.workerSrc = isModernBrowser 
+          ? `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`
+          : `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/legacy/build/pdf.worker.min.js`
       })
     }
   }, [])
@@ -33,7 +37,7 @@ export default function AiConverter() {
     try {
       const arrayBuffer = await aiFile.arrayBuffer()
       
-      // DYNAMICALLY IMPORT PDF.JS HERE AS WELL
+      // Dynamically import pdfjs-dist inside the browser function
       const pdfjsLib = await import('pdfjs-dist')
       
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
@@ -124,7 +128,7 @@ export default function AiConverter() {
       const link = document.createElement('a')
       link.href = downloadUrl
       const originalName = file.name.substring(0, file.name.lastIndexOf('.')) || file.name
-      link.download = `${originalName}-converted.${ext}`
+      link.download = `${originalName}_zs_converter.${ext}`
       link.click()
     } catch (e) {
       alert("Conversion failed.")
@@ -134,11 +138,15 @@ export default function AiConverter() {
   }
 
   return (
-    <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col md:flex-row h-[650px]">
-      <div className="w-full md:w-80 h-full bg-slate-50 p-6 border-r border-slate-200 flex flex-col gap-6">
-        <h3 className="text-xs font-bold text-slate-800 uppercase tracking-widest border-b pb-4 flex items-center gap-2"><Settings2 className="w-4 h-4"/> AI Engine</h3>
+    <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col lg:flex-row h-auto lg:h-[650px] min-h-[650px]">
+      
+      {/* Sidebar Workspace */}
+      <div className="w-full lg:w-80 h-auto lg:h-full bg-slate-50 p-4 lg:p-6 border-t lg:border-t-0 lg:border-r border-slate-200 flex flex-col gap-4 lg:gap-6 order-2 lg:order-1 overflow-y-auto">
+        <h3 className="text-xs font-bold text-slate-800 uppercase tracking-widest border-b pb-4 flex items-center gap-2 flex-shrink-0">
+          <Settings2 className="w-4 h-4"/> AI Engine
+        </h3>
         
-        <div className="space-y-3">
+        <div className="space-y-3 flex-shrink-0">
           <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">Output Format</label>
           <CustomDropdown 
             value={exportFormat} onChange={setExportFormat} disabled={isProcessing || !file} direction="down"
@@ -154,28 +162,36 @@ export default function AiConverter() {
           />
         </div>
 
-        <div className="mt-auto border-t border-slate-200 pt-6 space-y-3">
+        <div className="mt-auto border-t border-slate-200 pt-6 space-y-3 flex-shrink-0">
           <button onClick={handleExport} disabled={isProcessing || !file} className="w-full py-3 bg-[#6384A3] text-white font-bold rounded-lg hover:bg-[#4f6a83] disabled:opacity-50 shadow-md transition-colors flex items-center justify-center gap-2">
             {isProcessing ? 'Processing...' : <><Download className="w-4 h-4"/> Export Vector</>}
           </button>
         </div>
       </div>
 
-      <div className="flex-1 p-6 md:p-8 relative h-full flex flex-col">
+      {/* Main Image Area */}
+      <div className="flex-1 p-4 lg:p-8 relative h-full flex flex-col min-h-[400px] lg:min-h-full order-1 lg:order-2 bg-white">
         {!file ? (
-          <div {...getRootProps()} className={`flex-1 border-2 border-dashed rounded-xl flex flex-col items-center justify-center text-center cursor-pointer transition-colors ${isDragActive ? 'border-[#6384A3] bg-blue-50/50' : 'border-slate-300 hover:border-[#6384A3] hover:bg-slate-100/50'}`}>
+          <div {...getRootProps()} className={`flex-1 border-2 border-dashed rounded-xl flex flex-col items-center justify-center text-center cursor-pointer transition-colors p-6 ${isDragActive ? 'border-[#6384A3] bg-blue-50/50' : 'border-slate-300 hover:border-[#6384A3] hover:bg-slate-100/50'}`}>
             <input {...getInputProps()} />
-            <FileType2 className={`w-12 h-12 mb-4 ${isDragActive ? 'text-[#6384A3]' : 'text-slate-300'}`} />
-            <h3 className="text-lg font-bold text-slate-700 mb-1">Drop an .AI File</h3>
+            <FileType2 className={`w-10 h-10 lg:w-12 lg:h-12 mb-4 ${isDragActive ? 'text-[#6384A3]' : 'text-slate-300'}`} />
+            <h3 className="text-sm lg:text-lg font-bold text-slate-700 mb-1">Drop an .AI File</h3>
             <p className="text-xs text-slate-500">Requires "Create PDF Compatible File" to be enabled.</p>
           </div>
         ) : (
-          <div className="flex-1 bg-slate-100 rounded-lg p-4 flex items-center justify-center relative">
-            <button onClick={() => { setFile(null); setPreviewUrl(null); }} className="absolute top-3 right-3 z-50 bg-white/90 text-slate-800 p-2 rounded-full shadow-md hover:bg-red-500 hover:text-white transition-colors"><X className="w-5 h-5" /></button>
-            {previewUrl ? <img src={previewUrl} alt="AI Preview" className="max-w-full max-h-full object-contain drop-shadow-lg" /> : <p className="text-slate-500 font-bold animate-pulse">Rendering Vector Graphics...</p>}
+          <div className="flex-1 bg-slate-100 rounded-lg p-4 flex items-center justify-center relative overflow-hidden">
+            <button onClick={() => { setFile(null); setPreviewUrl(null); }} className="absolute top-3 right-3 z-50 bg-white/90 text-slate-800 p-2 rounded-full shadow-md hover:bg-red-500 hover:text-white transition-colors">
+              <X className="w-5 h-5" />
+            </button>
+            {previewUrl ? (
+              <img src={previewUrl} alt="AI Preview" className="max-w-full max-h-full object-contain drop-shadow-lg" />
+            ) : (
+              <p className="text-slate-500 font-bold animate-pulse text-sm">Rendering Vector Graphics...</p>
+            )}
           </div>
         )}
       </div>
+      
     </div>
   )
 }
