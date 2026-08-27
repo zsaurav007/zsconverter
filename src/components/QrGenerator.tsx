@@ -5,7 +5,7 @@ import QRCode from 'qrcode'
 import { Settings2, Download, Link2, ScanLine } from 'lucide-react'
 
 export default function QrGenerator() {
-  const [text, setText] = useState('https://zsconverter.com')
+  const [text, setText] = useState('https://zsconverter.vercel.app/')
   const [qrUrl, setQrUrl] = useState<string>('')
   const [darkColor, setDarkColor] = useState('#000000')
 

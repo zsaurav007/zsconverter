@@ -35,9 +35,9 @@ export default function Home() {
       <div className="max-w-6xl mx-auto space-y-8">
         <header className="text-center space-y-6">
           <div>
-            <h1 className="text-3xl font-extrabold tracking-tight text-slate-900">ZS Converter</h1>
+            <h1 className="text-3xl font-light tracking-widest text-slate-700">ZS CONVERTER</h1>
             <p className="text-sm text-slate-500 max-w-lg mx-auto mt-2">
-              A fast, private, browser-based media toolkit. Process your files locally with zero quality loss.
+              A fast, private, browser-based toolkit. Developed by Zulkarnain Saurav (+8801615201545)
             </p>
           </div>
 

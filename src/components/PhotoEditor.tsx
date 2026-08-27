@@ -136,8 +136,10 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
   }
 
   const handleExport = async () => {
+    const img = await createImage(currentImage)
+
+    // 1. PDF Export Path
     if (exportFormat === 'application/pdf') {
-      const img = await createImage(currentImage)
       const pdf = new jsPDF({ orientation: img.width > img.height ? 'landscape' : 'portrait', unit: 'px', format: [img.width, img.height] })
       pdf.addImage(currentImage, 'PNG', 0, 0, img.width, img.height)
       pdf.save('zsconverter-output.pdf')
@@ -145,7 +147,64 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
       return
     }
 
-    const img = await createImage(currentImage)
+    // 2. ICO Favicon (32x32) Export Path
+    if (exportFormat === 'image/x-icon') {
+      const icoCanvas = document.createElement('canvas')
+      icoCanvas.width = 32
+      icoCanvas.height = 32
+      const icoCtx = icoCanvas.getContext('2d')
+      if (!icoCtx) return
+
+      if (bgType === 'color') {
+        icoCtx.fillStyle = bgColor
+        icoCtx.fillRect(0, 0, 32, 32)
+      } else if (bgType === 'image' && bgImage) {
+        const bgImgObj = await createImage(bgImage)
+        icoCtx.drawImage(bgImgObj, 0, 0, 32, 32)
+      }
+
+      icoCtx.drawImage(img, 0, 0, 32, 32)
+
+      const pngBlob = await new Promise<Blob | null>(resolve => icoCanvas.toBlob(resolve, 'image/png'))
+      if (!pngBlob) return
+
+      const pngBuffer = await pngBlob.arrayBuffer()
+      const pngBytes = new Uint8Array(pngBuffer)
+
+      // Build ICO binary structure (6-byte header + 16-byte directory entry + PNG data)
+      const icoBuffer = new ArrayBuffer(22 + pngBytes.length)
+      const view = new DataView(icoBuffer)
+
+      // ICO Header
+      view.setUint16(0, 0, true) // Reserved
+      view.setUint16(2, 1, true) // Type: 1 for ICO
+      view.setUint16(4, 1, true) // Number of images: 1
+
+      // ICO Directory Entry
+      view.setUint8(6, 32) // Width
+      view.setUint8(7, 32) // Height
+      view.setUint8(8, 0)  // Color palette count
+      view.setUint8(9, 0)  // Reserved
+      view.setUint16(10, 1, true)  // Color planes
+      view.setUint16(12, 32, true) // Bits per pixel
+      view.setUint32(14, pngBytes.length, true) // Size of image data
+      view.setUint32(18, 22, true) // Data offset
+
+      // Write PNG payload
+      new Uint8Array(icoBuffer, 22).set(pngBytes)
+
+      const icoBlob = new Blob([icoBuffer], { type: 'image/x-icon' })
+      const finalUrl = URL.createObjectURL(icoBlob)
+      const link = document.createElement('a')
+      link.href = finalUrl
+      link.download = `zsconverter-favicon-${Date.now()}.ico`
+      link.click()
+      
+      onComplete(finalUrl)
+      return
+    }
+
+    // 3. Standard Raster Image Export Path
     const canvas = document.createElement('canvas')
     canvas.width = img.width
     canvas.height = img.height
@@ -167,10 +226,16 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
     if (exportFormat === 'image/webp-lossless') mimeType = 'image/webp'
 
     const finalUrl = canvas.toDataURL(mimeType, quality)
+    const link = document.createElement('a')
+    link.href = finalUrl
+    const ext = mimeType.split('/')[1]
+    link.download = `zsconverter-output.${ext}`
+    link.click()
+    
     onComplete(finalUrl)
   }
 
-  const isLosslessFormat = exportFormat === 'image/png' || exportFormat === 'image/webp-lossless' || exportFormat === 'application/pdf'
+  const isLosslessFormat = exportFormat === 'image/png' || exportFormat === 'image/webp-lossless' || exportFormat === 'application/pdf' || exportFormat === 'image/x-icon'
   const sourceFormatDisplay = file.type.split('/')[1]?.toUpperCase() || 'UNKNOWN'
 
   const filterStyle = activeTool === 'enhance' 
@@ -315,6 +380,7 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
                   { value: 'image/webp-lossless', label: 'WebP (Lossless)' },
                   { value: 'image/webp', label: 'WebP (Lossy Compression)' },
                   { value: 'image/jpeg', label: 'JPG / JPEG (Lossy)' },
+                  { value: 'image/x-icon', label: 'ICO Favicon (32x32)' },
                   { value: 'application/pdf', label: 'PDF Document' }
                 ]}
              />
