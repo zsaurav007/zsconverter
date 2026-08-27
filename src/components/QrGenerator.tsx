@@ -4,7 +4,11 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import QRCode from 'qrcode'
 import jsQR from 'jsqr'
 import { useDropzone } from 'react-dropzone'
-import { Settings2, Download, Link2, ScanLine, QrCode, UploadCloud, Copy, ExternalLink, CheckCircle2, Camera, Image as ImageIcon } from 'lucide-react'
+import { 
+  Settings2, Download, Link2, ScanLine, QrCode, 
+  UploadCloud, Copy, ExternalLink, CheckCircle2, 
+  Camera, Image as ImageIcon, X 
+} from 'lucide-react' // Added 'X' here
 
 export default function QrGenerator() {
   // Mode State
@@ -169,7 +173,6 @@ export default function QrGenerator() {
     }
     return () => stopCamera()
   }, [mode, scanMethod, stopCamera])
-
 
   // --- UTILS ---
   const copyToClipboard = () => {

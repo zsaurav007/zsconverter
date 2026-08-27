@@ -8,7 +8,7 @@ import { removeBackground, Config } from '@imgly/background-removal'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, useSortable, rectSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Settings2, Trash2, Eye, Download, RotateCw, Lock, Unlock, FileText, Type, SlidersHorizontal, X, FileImage, ShieldCheck, Layers, Scissors, Wand2, Hash, Edit3, PenTool, Image as ImageIcon, Sparkles, Move } from 'lucide-react'
+import { Settings2, Trash2, Eye, Download, RotateCw, Lock, Unlock, FileText, Type, SlidersHorizontal, X, FileImage, ShieldCheck, Layers, Scissors, Wand2, Hash, Edit3, PenTool, Image as ImageIcon, Sparkles, Move, ChevronLeft, ChevronRight, LayoutGrid } from 'lucide-react'
 import CustomDropdown from './CustomDropdown'
 
 // --- HELPER FUNCTION ---
@@ -96,6 +96,8 @@ function SortablePageItem({ id, url, index, rotation, fineRotation, scale, onRem
 // --- MAIN COMPONENT ---
 type PageItem = { id: string; url: string; isLossless: boolean; rotation: number; fineRotation: number; scale: number }
 
+type SigPlacement = { x: number, y: number, scale: number, opacity: number }
+
 type SignatureState = {
   enabled: boolean;
   mode: 'text' | 'image';
@@ -103,11 +105,9 @@ type SignatureState = {
   font: string;
   color: string;
   imageUrl: string | null;
-  scale: number;
-  opacity: number;
-  applyTo: 'all' | number;
-  x: number; 
-  y: number; 
+  applyMode: 'all' | 'custom';
+  customPages: string; // e.g. "1-3, 5"
+  placements: Record<number, SigPlacement>; // Individual page placement overrides
 }
 
 export default function PdfEditor() {
@@ -137,15 +137,21 @@ export default function PdfEditor() {
     font: 'Brush Script MT, cursive',
     color: '#000033',
     imageUrl: null,
-    scale: 50,
-    opacity: 100,
-    applyTo: 'all',
-    x: 50,
-    y: 80
+    applyMode: 'all',
+    customPages: '',
+    placements: {}
   })
+  
   const [showSigModal, setShowSigModal] = useState(false)
   const [isDraggingSig, setIsDraggingSig] = useState(false)
-  const sigContainerRef = useRef<HTMLDivElement>(null)
+  const [draggingContext, setDraggingContext] = useState<'right' | 'modal' | null>(null)
+  const [resizingState, setResizingState] = useState<{ startX: number, startY: number, startScale: number, corner: string } | null>(null)
+  
+  const [previewPageIndex, setPreviewPageIndex] = useState(0)
+  const [showViewerGrid, setShowViewerGrid] = useState(false) // Toggle for page navigator grid
+
+  const rightSideSigRef = useRef<HTMLDivElement>(null)
+  const modalSigRef = useRef<HTMLDivElement>(null)
 
   const [enableCompression, setEnableCompression] = useState(false)
   const [compressionQuality, setCompressionQuality] = useState(70)
@@ -169,6 +175,50 @@ export default function PdfEditor() {
           : `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/legacy/build/pdf.worker.min.js`
       })
     }
+  }, [])
+
+  // Sync preview index safely when pages are added/removed
+  useEffect(() => {
+    if (previewPageIndex >= pages.length && pages.length > 0) {
+      setPreviewPageIndex(pages.length - 1)
+    }
+  }, [pages.length, previewPageIndex])
+
+  // --- SIGNATURE HELPERS ---
+  const getSigPlacement = useCallback((index: number) => {
+    return signature.placements[index] || { x: 50, y: 80, scale: 50, opacity: 100 }
+  }, [signature.placements])
+
+  const updateSigPlacement = useCallback((index: number, updates: Partial<SigPlacement>) => {
+    setSignature(s => ({
+      ...s,
+      placements: {
+        ...s.placements,
+        [index]: { ...getSigPlacement(index), ...updates }
+      }
+    }))
+  }, [getSigPlacement])
+
+  const shouldApplySignature = useCallback((pageIndex: number, applyMode: 'all' | 'custom', customPages: string) => {
+    if (applyMode === 'all') return true;
+    if (!customPages.trim()) return false;
+    
+    const pagesToApply = new Set<number>();
+    const parts = customPages.split(',');
+    for (const p of parts) {
+      const trimP = p.trim();
+      if (!trimP) continue;
+      if (trimP.includes('-')) {
+        const [s, e] = trimP.split('-').map(n => parseInt(n, 10));
+        if (!isNaN(s) && !isNaN(e)) {
+          for(let i = Math.min(s, e); i <= Math.max(s, e); i++) pagesToApply.add(i - 1);
+        }
+      } else {
+        const n = parseInt(trimP, 10);
+        if (!isNaN(n)) pagesToApply.add(n - 1);
+      }
+    }
+    return pagesToApply.has(pageIndex);
   }, [])
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
@@ -274,9 +324,10 @@ export default function PdfEditor() {
   const clearAll = () => {
     setPages([])
     setOriginalDocName('document')
+    setPreviewPageIndex(0)
+    setSignature(s => ({ ...s, placements: {} }))
   }
 
-  // --- SIGNATURE LOGIC ---
   const handleSigImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       setSignature(s => ({ ...s, imageUrl: URL.createObjectURL(e.target.files![0]), mode: 'image' }))
@@ -308,7 +359,6 @@ export default function PdfEditor() {
       const cvs = document.createElement('canvas')
       cvs.width = img.width; cvs.height = img.height
       const ctx = cvs.getContext('2d')!
-      // Filter for dark pen look
       ctx.filter = 'contrast(200%) brightness(80%) grayscale(100%)'
       ctx.drawImage(img, 0, 0)
       setSignature(s => ({ ...s, imageUrl: cvs.toDataURL('image/png') }))
@@ -320,16 +370,229 @@ export default function PdfEditor() {
     }
   }
 
-  const handlePointerDownSig = () => setIsDraggingSig(true)
-  const handlePointerUpSig = () => setIsDraggingSig(false)
+  // Drag Placement Handlers
+  const handlePointerDownSig = (ctx: 'right' | 'modal') => { setIsDraggingSig(true); setDraggingContext(ctx); }
+  const handlePointerUpSig = () => { setIsDraggingSig(false); setDraggingContext(null); setResizingState(null); }
+  
+  // Resizing Corner Handler
+  const handleResizeDown = (e: React.PointerEvent, corner: string, ctx: 'right' | 'modal') => {
+    e.stopPropagation() // Prevent teleport jump
+    setResizingState({
+      startX: e.clientX,
+      startY: e.clientY,
+      startScale: getSigPlacement(previewPageIndex).scale,
+      corner
+    })
+    setDraggingContext(ctx)
+  }
+
   const handlePointerMoveSig = (e: React.PointerEvent) => {
-    if (!isDraggingSig || !sigContainerRef.current) return
-    const rect = sigContainerRef.current.getBoundingClientRect()
-    let x = ((e.clientX - rect.left) / rect.width) * 100
-    let y = ((e.clientY - rect.top) / rect.height) * 100
-    x = Math.max(0, Math.min(100, x))
-    y = Math.max(0, Math.min(100, y))
-    setSignature(s => ({ ...s, x, y }))
+    if (!draggingContext) return
+
+    if (resizingState) {
+      const dx = e.clientX - resizingState.startX
+      const dy = e.clientY - resizingState.startY
+      let delta = 0
+      
+      // Calculate scale change based on drag direction
+      if (resizingState.corner === 'br') delta = (dx + dy) * 0.2
+      else if (resizingState.corner === 'tl') delta = -(dx + dy) * 0.2
+      else if (resizingState.corner === 'tr') delta = (dx - dy) * 0.2
+      else if (resizingState.corner === 'bl') delta = (-dx + dy) * 0.2
+
+      const newScale = Math.max(10, Math.min(200, resizingState.startScale + delta))
+      updateSigPlacement(previewPageIndex, { scale: newScale })
+      return
+    }
+
+    if (isDraggingSig) {
+      const ref = draggingContext === 'right' ? rightSideSigRef : modalSigRef
+      if (!ref.current) return
+      const rect = ref.current.getBoundingClientRect()
+      let x = ((e.clientX - rect.left) / rect.width) * 100
+      let y = ((e.clientY - rect.top) / rect.height) * 100
+      x = Math.max(0, Math.min(100, x))
+      y = Math.max(0, Math.min(100, y))
+      updateSigPlacement(previewPageIndex, { x, y })
+    }
+  }
+
+  // Helper rendering to reuse the overlay in both Side-by-Side and Modal views
+  const renderSignatureOverlay = (ctx: 'right' | 'modal') => {
+    const placement = getSigPlacement(previewPageIndex)
+    return (
+      <div 
+        className="absolute transition-opacity duration-75 z-20"
+        style={{
+          left: `${placement.x}%`,
+          top: `${placement.y}%`,
+          transform: 'translate(-50%, -50%)',
+          opacity: placement.opacity / 100,
+          pointerEvents: 'none' // Allows clicking through the main container to start drag
+        }}
+      >
+        <div className="relative pointer-events-auto group">
+          {signature.mode === 'text' ? (
+            <span style={{ fontFamily: signature.font, color: signature.color, fontSize: `${(placement.scale / 100) * 3}rem`, whiteSpace: 'nowrap', display: 'block', padding: '4px' }}>
+              {signature.text || ' '}
+            </span>
+          ) : signature.imageUrl ? (
+            <img src={signature.imageUrl} alt="Sig" style={{ width: `${placement.scale * 3}px` }} className="mix-blend-multiply block pointer-events-none" />
+          ) : (
+            <div style={{ width: `${placement.scale * 3}px`, height: '40px' }} /> // Empty placeholder
+          )}
+          
+          {/* Border box when interacting or hovering */}
+          <div className={`absolute inset-0 border-2 border-dashed ${(isDraggingSig || resizingState) && draggingContext === ctx ? 'border-blue-500 bg-blue-500/10' : 'border-transparent group-hover:border-slate-300'} rounded pointer-events-none transition-colors`} />
+          
+          {/* Resize Handles */}
+          <div className="absolute -top-2 -left-2 w-4 h-4 bg-white border-2 border-blue-500 rounded-full cursor-nwse-resize pointer-events-auto opacity-0 group-hover:opacity-100 transition-opacity" onPointerDown={(e) => handleResizeDown(e, 'tl', ctx)} />
+          <div className="absolute -top-2 -right-2 w-4 h-4 bg-white border-2 border-blue-500 rounded-full cursor-nesw-resize pointer-events-auto opacity-0 group-hover:opacity-100 transition-opacity" onPointerDown={(e) => handleResizeDown(e, 'tr', ctx)} />
+          <div className="absolute -bottom-2 -left-2 w-4 h-4 bg-white border-2 border-blue-500 rounded-full cursor-nesw-resize pointer-events-auto opacity-0 group-hover:opacity-100 transition-opacity" onPointerDown={(e) => handleResizeDown(e, 'bl', ctx)} />
+          <div className="absolute -bottom-2 -right-2 w-4 h-4 bg-white border-2 border-blue-500 rounded-full cursor-nwse-resize pointer-events-auto opacity-0 group-hover:opacity-100 transition-opacity" onPointerDown={(e) => handleResizeDown(e, 'br', ctx)} />
+        </div>
+      </div>
+    )
+  }
+
+  // Navigation UI Overlay for Viewer
+  const renderPaginationOverlay = () => {
+    if (pages.length <= 1) return null;
+    return (
+      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 md:gap-4 bg-white/95 backdrop-blur shadow-xl px-4 py-2 rounded-full border border-slate-200 pointer-events-auto">
+        <button 
+          onClick={(e) => { e.stopPropagation(); setShowViewerGrid(!showViewerGrid) }}
+          className={`p-1.5 rounded-full transition-colors ${showViewerGrid ? 'bg-[#6384A3] text-white' : 'hover:bg-slate-200 text-slate-700'}`}
+          title="View All Pages"
+        >
+          <LayoutGrid className="w-4 h-4" />
+        </button>
+        
+        <div className="h-4 w-px bg-slate-300 mx-1" />
+
+        <button 
+          onClick={(e) => { e.stopPropagation(); setPreviewPageIndex(p => Math.max(0, p - 1)) }} 
+          disabled={previewPageIndex === 0 || showViewerGrid} 
+          className="p-1 rounded-full hover:bg-slate-200 disabled:opacity-50 transition-colors"
+        >
+          <ChevronLeft className="w-5 h-5" />
+        </button>
+        <span className="text-xs font-bold text-slate-700 tracking-widest whitespace-nowrap min-w-[90px] text-center">
+          PAGE {previewPageIndex + 1} OF {pages.length}
+        </span>
+        <button 
+          onClick={(e) => { e.stopPropagation(); setPreviewPageIndex(p => Math.min(pages.length - 1, p + 1)) }} 
+          disabled={previewPageIndex === pages.length - 1 || showViewerGrid} 
+          className="p-1 rounded-full hover:bg-slate-200 disabled:opacity-50 transition-colors"
+        >
+          <ChevronRight className="w-5 h-5" />
+        </button>
+      </div>
+    )
+  }
+
+  // Sidebar shared signature controls
+  const renderSignatureControls = (context: 'sidebar' | 'modal') => {
+    const currentPlacement = getSigPlacement(previewPageIndex)
+    return (
+      <div className="space-y-4 animate-in fade-in w-full">
+        <div className="flex bg-slate-100 p-1 rounded">
+          <button onClick={() => setSignature(s => ({ ...s, mode: 'text' }))} className={`flex-1 py-1 text-[10px] font-bold uppercase tracking-widest rounded ${signature.mode === 'text' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}>Text</button>
+          <button onClick={() => setSignature(s => ({ ...s, mode: 'image' }))} className={`flex-1 py-1 text-[10px] font-bold uppercase tracking-widest rounded ${signature.mode === 'image' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}>Image</button>
+        </div>
+
+        {signature.mode === 'text' && (
+          <div className="space-y-3">
+            <input type="text" value={signature.text} onChange={(e) => setSignature(s => ({ ...s, text: e.target.value }))} className="w-full p-2 border border-slate-200 rounded text-sm bg-white" placeholder="Type name..." />
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block">Font Style</label>
+                <CustomDropdown 
+                  value={signature.font} 
+                  onChange={(val) => setSignature(s => ({ ...s, font: val }))} 
+                  options={[
+                    { value: 'Brush Script MT, cursive', label: 'Cursive' },
+                    { value: 'Arial, sans-serif', label: 'Arial' },
+                    { value: 'Times New Roman, serif', label: 'Times' },
+                    { value: 'Courier New, monospace', label: 'Typewriter' }
+                  ]} 
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block">Text Color</label>
+                <div className="flex items-center justify-between gap-2 bg-white border border-slate-200 rounded p-1 h-9">
+                  <input type="color" value={signature.color} onChange={(e) => setSignature(s => ({ ...s, color: e.target.value }))} className="w-6 h-6 rounded cursor-pointer border-0 bg-transparent p-0 flex-shrink-0" />
+                  <span className="text-[10px] font-mono font-bold text-slate-500 truncate">{signature.color.toUpperCase()}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {signature.mode === 'image' && (
+          <div className="space-y-3">
+            <button onClick={() => document.getElementById('sig-upload')?.click()} className="w-full py-2 bg-slate-50 border border-slate-200 text-slate-600 font-bold text-[10px] uppercase tracking-widest rounded hover:bg-slate-100 flex items-center justify-center gap-2">
+              <ImageIcon className="w-3 h-3" /> Upload Signature Image
+            </button>
+            <input type="file" id="sig-upload" accept="image/*" className="hidden" onChange={handleSigImageUpload} />
+            
+            {signature.imageUrl && (
+              <div className="grid grid-cols-2 gap-2">
+                <button onClick={handleRemoveSigBg} disabled={isProcessing} className="py-2 bg-[#6384A3]/10 text-[#6384A3] border border-[#6384A3]/20 font-bold text-[9px] uppercase tracking-widest rounded hover:bg-[#6384A3]/20 transition-colors">
+                  Remove BG
+                </button>
+                <button onClick={handleEnhanceSig} disabled={isProcessing} className="py-2 bg-indigo-50 text-indigo-700 border border-indigo-200 font-bold text-[9px] uppercase tracking-widest rounded hover:bg-indigo-100 transition-colors flex justify-center items-center gap-1">
+                  <Sparkles className="w-3 h-3" /> Enhance Ink
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="space-y-3 pt-2 border-t border-slate-100">
+          <div className="space-y-1">
+            <div className="flex justify-between text-[9px] font-bold text-slate-500 uppercase tracking-widest">
+              <span>Scale (Page {previewPageIndex + 1})</span><span>{Math.round(currentPlacement.scale)}%</span>
+            </div>
+            <input type="range" min="10" max="200" value={currentPlacement.scale} onChange={(e) => updateSigPlacement(previewPageIndex, { scale: Number(e.target.value) })} className="w-full accent-[#6384A3]" />
+          </div>
+          <div className="space-y-1">
+            <div className="flex justify-between text-[9px] font-bold text-slate-500 uppercase tracking-widest">
+              <span>Opacity (Page {previewPageIndex + 1})</span><span>{currentPlacement.opacity}%</span>
+            </div>
+            <input type="range" min="10" max="100" value={currentPlacement.opacity} onChange={(e) => updateSigPlacement(previewPageIndex, { opacity: Number(e.target.value) })} className="w-full accent-[#6384A3]" />
+          </div>
+          
+          <div className="space-y-1 pt-2">
+            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Apply To</label>
+            <CustomDropdown 
+              value={signature.applyMode} 
+              onChange={(val) => setSignature(s => ({ ...s, applyMode: val as 'all' | 'custom' }))} 
+              direction="up"
+              options={[
+                { value: 'all', label: 'All Pages' },
+                { value: 'custom', label: 'Custom Pages' }
+              ]} 
+            />
+            {signature.applyMode === 'custom' && (
+              <input 
+                type="text" 
+                placeholder="e.g. 1-3, 5, 8" 
+                value={signature.customPages} 
+                onChange={(e) => setSignature(s => ({ ...s, customPages: e.target.value }))} 
+                className="w-full p-2 mt-2 border border-slate-200 rounded text-sm bg-white" 
+              />
+            )}
+          </div>
+
+          {context === 'sidebar' && (
+            <button onClick={() => setShowSigModal(true)} disabled={pages.length === 0 || (signature.mode === 'image' && !signature.imageUrl)} className="w-full py-2.5 bg-slate-800 text-white font-bold text-[10px] uppercase tracking-widest rounded-lg hover:bg-black transition-colors shadow-sm flex items-center justify-center gap-2">
+              <Move className="w-3.5 h-3.5" /> Open Full Screen
+            </button>
+          )}
+        </div>
+      </div>
+    )
   }
 
   // --- PDF GENERATION LOGIC ---
@@ -378,14 +641,16 @@ export default function PdfEditor() {
       }
 
       // Add Signature
-      if (signature.enabled && (signature.applyTo === 'all' || signature.applyTo === i)) {
+      if (signature.enabled && shouldApplySignature(i, signature.applyMode, signature.customPages)) {
+        const placement = getSigPlacement(i)
+        
         ctx.save()
-        ctx.globalAlpha = signature.opacity / 100
-        const sigX = (signature.x / 100) * canvas.width
-        const sigY = (signature.y / 100) * canvas.height
+        ctx.globalAlpha = placement.opacity / 100
+        const sigX = (placement.x / 100) * canvas.width
+        const sigY = (placement.y / 100) * canvas.height
 
         if (signature.mode === 'text' && signature.text) {
-          const fontSize = (signature.scale / 100) * canvas.width * 0.1 // Scaled to canvas width
+          const fontSize = (placement.scale / 100) * canvas.width * 0.1 // Scaled to canvas width
           ctx.font = `${fontSize}px ${signature.font}`
           ctx.fillStyle = signature.color
           ctx.textAlign = 'center'
@@ -394,7 +659,7 @@ export default function PdfEditor() {
         } else if (signature.mode === 'image' && signature.imageUrl) {
           const sigImg = await createImage(signature.imageUrl)
           const baseSigWidth = canvas.width * 0.3 // 30% of page default
-          const drawWidth = baseSigWidth * (signature.scale / 50)
+          const drawWidth = baseSigWidth * (placement.scale / 50)
           const drawHeight = (sigImg.height / sigImg.width) * drawWidth
           ctx.drawImage(sigImg, sigX - drawWidth / 2, sigY - drawHeight / 2, drawWidth, drawHeight)
         }
@@ -471,10 +736,6 @@ export default function PdfEditor() {
       <head><meta charset='utf-8'><title>Exported Doc</title></head><body>`
       
       for (let i = 0; i < pages.length; i++) {
-        // Simple approach: Generate the same processed canvas but encode directly to Word HTML
-        const blob = await generatePdfBlob([pages[i]]) // Hack to leverage the same rendering engine per page
-        // Wait, generatePdfBlob returns a PDF blob. We just want the image.
-        // Let's re-render the single page to JPEG manually to match Word exactly.
         const canvas = document.createElement('canvas')
         const ctx = canvas.getContext('2d')
         if(!ctx) continue
@@ -626,7 +887,8 @@ export default function PdfEditor() {
   }
 
   const editingPageData = editingPageId ? pages.find(p => p.id === editingPageId) : null
-  const sigPageTarget = signature.applyTo === 'all' ? pages[0] : pages[signature.applyTo as number]
+  const sigPageTarget = pages.length > 0 ? (pages[previewPageIndex] || pages[0]) : null
+  const appliesToCurrent = shouldApplySignature(previewPageIndex, signature.applyMode, signature.customPages)
 
   return (
     <>
@@ -698,88 +960,7 @@ export default function PdfEditor() {
 
                   {signature.enabled && (
                     <div className="space-y-4 animate-in fade-in">
-                      {/* Mode Toggle */}
-                      <div className="flex bg-slate-100 p-1 rounded">
-                        <button onClick={() => setSignature(s => ({ ...s, mode: 'text' }))} className={`flex-1 py-1 text-[10px] font-bold uppercase tracking-widest rounded ${signature.mode === 'text' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}>Text</button>
-                        <button onClick={() => setSignature(s => ({ ...s, mode: 'image' }))} className={`flex-1 py-1 text-[10px] font-bold uppercase tracking-widest rounded ${signature.mode === 'image' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}>Image</button>
-                      </div>
-
-                      {/* Text Mode Options */}
-                      {signature.mode === 'text' && (
-                        <div className="space-y-3">
-                          <input type="text" value={signature.text} onChange={(e) => setSignature(s => ({ ...s, text: e.target.value }))} className="w-full p-2 border border-slate-200 rounded text-sm bg-white" placeholder="Type name..." />
-                          <div className="grid grid-cols-2 gap-2">
-                            <CustomDropdown 
-                              value={signature.font} 
-                              onChange={(val) => setSignature(s => ({ ...s, font: val }))} 
-                              options={[
-                                { value: 'Brush Script MT, cursive', label: 'Cursive' },
-                                { value: 'Arial, sans-serif', label: 'Arial' },
-                                { value: 'Times New Roman, serif', label: 'Times' },
-                                { value: 'Courier New, monospace', label: 'Typewriter' }
-                              ]} 
-                            />
-                            <div className="flex items-center gap-2 bg-white border border-slate-200 rounded p-1">
-                              <input type="color" value={signature.color} onChange={(e) => setSignature(s => ({ ...s, color: e.target.value }))} className="w-8 h-8 rounded cursor-pointer border-0 bg-transparent p-0" />
-                              <span className="text-[10px] font-mono font-bold text-slate-500">{signature.color}</span>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Image Mode Options */}
-                      {signature.mode === 'image' && (
-                        <div className="space-y-3">
-                          <button onClick={() => document.getElementById('sig-upload')?.click()} className="w-full py-2 bg-slate-50 border border-slate-200 text-slate-600 font-bold text-[10px] uppercase tracking-widest rounded hover:bg-slate-100 flex items-center justify-center gap-2">
-                            <ImageIcon className="w-3 h-3" /> Upload Signature Image
-                          </button>
-                          <input type="file" id="sig-upload" accept="image/*" className="hidden" onChange={handleSigImageUpload} />
-                          
-                          {signature.imageUrl && (
-                            <div className="grid grid-cols-2 gap-2">
-                              <button onClick={handleRemoveSigBg} disabled={isProcessing} className="py-2 bg-[#6384A3]/10 text-[#6384A3] border border-[#6384A3]/20 font-bold text-[9px] uppercase tracking-widest rounded hover:bg-[#6384A3]/20 transition-colors">
-                                Remove BG
-                              </button>
-                              <button onClick={handleEnhanceSig} disabled={isProcessing} className="py-2 bg-indigo-50 text-indigo-700 border border-indigo-200 font-bold text-[9px] uppercase tracking-widest rounded hover:bg-indigo-100 transition-colors flex justify-center items-center gap-1">
-                                <Sparkles className="w-3 h-3" /> Enhance Ink
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Universal Sig Controls */}
-                      <div className="space-y-3 pt-2 border-t border-slate-100">
-                        <div className="space-y-1">
-                          <div className="flex justify-between text-[9px] font-bold text-slate-500 uppercase tracking-widest">
-                            <span>Scale / Size</span><span>{signature.scale}%</span>
-                          </div>
-                          <input type="range" min="10" max="200" value={signature.scale} onChange={(e) => setSignature(s => ({ ...s, scale: Number(e.target.value) }))} className="w-full accent-[#6384A3]" />
-                        </div>
-                        <div className="space-y-1">
-                          <div className="flex justify-between text-[9px] font-bold text-slate-500 uppercase tracking-widest">
-                            <span>Opacity</span><span>{signature.opacity}%</span>
-                          </div>
-                          <input type="range" min="10" max="100" value={signature.opacity} onChange={(e) => setSignature(s => ({ ...s, opacity: Number(e.target.value) }))} className="w-full accent-[#6384A3]" />
-                        </div>
-                        
-                        <div className="space-y-1 pt-2">
-                          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Apply To</label>
-                          <CustomDropdown 
-                            value={signature.applyTo.toString()} 
-                            onChange={(val) => setSignature(s => ({ ...s, applyTo: val === 'all' ? 'all' : Number(val) }))} 
-                            direction="up"
-                            options={[
-                              { value: 'all', label: 'All Pages' },
-                              ...pages.map((_, i) => ({ value: i.toString(), label: `Page ${i + 1} Only` }))
-                            ]} 
-                          />
-                        </div>
-
-                        <button onClick={() => setShowSigModal(true)} disabled={pages.length === 0 || (signature.mode === 'image' && !signature.imageUrl)} className="w-full py-2.5 bg-slate-800 text-white font-bold text-[10px] uppercase tracking-widest rounded-lg hover:bg-black transition-colors shadow-sm flex items-center justify-center gap-2">
-                          <Move className="w-3.5 h-3.5" /> Set Signature Position
-                        </button>
-                      </div>
+                      {renderSignatureControls('sidebar')}
                     </div>
                   )}
                 </div>
@@ -898,7 +1079,6 @@ export default function PdfEditor() {
 
           {/* Export Actions */}
           <div className="mt-auto pt-4 border-t border-slate-200 flex-shrink-0 space-y-3">
-            
             <div className="space-y-2">
               <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Main Export Format</label>
               <CustomDropdown 
@@ -924,7 +1104,7 @@ export default function PdfEditor() {
           </div>
         </div>
 
-        {/* Main Grid Area */}
+        {/* Main Grid / Preview Area */}
         <div className="flex-1 p-4 lg:p-8 bg-white flex flex-col relative min-h-[400px] lg:h-full order-1 lg:order-2">
           <div className="flex justify-between items-center mb-4 lg:mb-6 border-b border-slate-100 pb-2 flex-shrink-0">
             <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">
@@ -944,8 +1124,52 @@ export default function PdfEditor() {
               <h3 className="text-sm font-bold text-slate-700">Drag & drop PDFs or Images here</h3>
               <p className="text-xs text-slate-500 mt-1">Pro Tip: Drop multiple files to merge them</p>
             </div>
+          ) : activePanel === 'signature' && pages.length > 0 && sigPageTarget ? (
+            // Live Signature Preview & Positioning (Right Side)
+            <div className="flex-1 flex flex-col h-full bg-slate-100 rounded-xl border border-slate-200 overflow-hidden relative select-none animate-in fade-in">
+              <div className="absolute top-3 left-3 z-10 bg-white/90 px-3 py-1.5 rounded shadow-sm text-[10px] font-bold text-slate-600 uppercase tracking-widest flex items-center gap-2 border border-slate-200 pointer-events-none">
+                <Move className="w-3.5 h-3.5" /> {signature.enabled ? "Drag or Resize Signature" : "Document Preview"}
+              </div>
+              
+              {renderPaginationOverlay()}
+
+              <div className="flex-1 flex items-center justify-center p-4 overflow-hidden relative touch-none">
+                {showViewerGrid ? (
+                  <div className="absolute inset-0 z-40 bg-slate-100 overflow-y-auto p-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 animate-in fade-in">
+                    {pages.map((p, idx) => (
+                      <div key={p.id} onClick={() => { setPreviewPageIndex(idx); setShowViewerGrid(false); }} className={`cursor-pointer border-2 rounded-lg overflow-hidden aspect-[3/4] relative transition-colors ${previewPageIndex === idx ? 'border-[#6384A3] ring-2 ring-[#6384A3]/30' : 'border-transparent hover:border-slate-300'}`}>
+                        <img src={p.url} alt={`Thumb ${idx+1}`} className="w-full h-full object-contain bg-white" style={{ transform: `rotate(${p.rotation + p.fineRotation}deg)` }} />
+                        <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded">Page {idx + 1}</div>
+                        {signature.enabled && shouldApplySignature(idx, signature.applyMode, signature.customPages) && (
+                          <div className="absolute top-1 right-1 bg-[#6384A3] text-white text-[9px] px-1.5 py-0.5 rounded shadow">Signed</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div
+                    ref={rightSideSigRef}
+                    className="relative shadow-lg bg-white touch-none"
+                    onPointerDown={() => handlePointerDownSig('right')}
+                    onPointerMove={handlePointerMoveSig}
+                    onPointerUp={handlePointerUpSig}
+                    onPointerLeave={handlePointerUpSig}
+                  >
+                    <img
+                      src={sigPageTarget.url}
+                      className="max-h-[65vh] object-contain pointer-events-none"
+                      style={{ transform: `rotate(${sigPageTarget.rotation + sigPageTarget.fineRotation}deg) scale(${sigPageTarget.scale || 1})` }}
+                      alt="Placement Target"
+                      draggable={false}
+                    />
+                    {signature.enabled && appliesToCurrent && renderSignatureOverlay('right')}
+                  </div>
+                )}
+              </div>
+            </div>
           ) : (
-            <div className="flex-1 overflow-y-auto pr-2">
+            // DND Page Grid View
+            <div className="flex-1 overflow-y-auto pr-2 animate-in fade-in">
               <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
                 <SortableContext items={pages.map(p => p.id)} strategy={rectSortingStrategy}>
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 lg:gap-6 pb-6">
@@ -988,61 +1212,65 @@ export default function PdfEditor() {
         </div>
       </div>
 
-      {/* Signature Placement Modal */}
+      {/* Fullscreen Signature Modal */}
       {showSigModal && sigPageTarget && (
-        <div className="fixed inset-0 z-[160] bg-slate-900/95 flex flex-col animate-in fade-in duration-200">
-          <div className="flex justify-between items-center p-4 bg-slate-900 border-b border-slate-800">
-            <h3 className="text-sm font-bold text-white uppercase tracking-widest flex items-center gap-2">
-              <Move className="w-4 h-4 text-[#6384A3]" /> Drag to Position Signature
-            </h3>
-            <button onClick={() => setShowSigModal(false)} className="text-slate-400 hover:text-red-500 transition-colors">
-              <X className="w-5 h-5" />
-            </button>
+        <div className="fixed inset-0 z-[160] bg-slate-900/95 flex flex-col md:flex-row animate-in fade-in duration-200">
+          
+          {/* Settings Sidebar for Modal */}
+          <div className="w-full md:w-80 bg-white md:h-full flex flex-col border-b md:border-b-0 md:border-r border-slate-200 overflow-y-auto shrink-0">
+            <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50 sticky top-0 z-10">
+              <h3 className="text-xs font-bold text-slate-800 uppercase tracking-widest flex items-center gap-2">
+                <PenTool className="w-4 h-4 text-[#6384A3]" /> Signature Studio
+              </h3>
+              <button onClick={() => setShowSigModal(false)} className="text-slate-400 hover:text-red-500 transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              {renderSignatureControls('modal')}
+              <button onClick={() => setShowSigModal(false)} className="w-full mt-4 px-8 py-3 bg-slate-800 hover:bg-black text-white font-bold rounded uppercase tracking-widest text-xs transition-colors shadow-sm">
+                Save & Close
+              </button>
+            </div>
           </div>
           
-          <div className="flex-1 overflow-auto p-4 flex items-center justify-center relative touch-none select-none">
-             <div 
-               ref={sigContainerRef}
-               className="relative shadow-2xl bg-white select-none touch-none"
-               onPointerDown={handlePointerDownSig}
-               onPointerMove={handlePointerMoveSig}
-               onPointerUp={handlePointerUpSig}
-               onPointerLeave={handlePointerUpSig}
-             >
-                <img 
-                  src={sigPageTarget.url} 
-                  className="max-h-[75vh] object-contain pointer-events-none" 
-                  style={{ transform: `rotate(${sigPageTarget.rotation + sigPageTarget.fineRotation}deg) scale(${sigPageTarget.scale || 1})` }}
-                  alt="Placement Target" 
-                  draggable={false}
-                />
-                
-                {/* Draggable Signature Overlay */}
-                <div 
-                  className="absolute pointer-events-none transition-opacity duration-75"
-                  style={{
-                    left: `${signature.x}%`,
-                    top: `${signature.y}%`,
-                    transform: 'translate(-50%, -50%)',
-                    opacity: signature.opacity / 100,
-                  }}
-                >
-                  {signature.mode === 'text' ? (
-                    <span style={{ fontFamily: signature.font, color: signature.color, fontSize: `${(signature.scale / 100) * 3}rem`, whiteSpace: 'nowrap' }}>
-                      {signature.text}
-                    </span>
-                  ) : signature.imageUrl ? (
-                    <img src={signature.imageUrl} alt="Sig" style={{ width: `${signature.scale * 3}px` }} className="pointer-events-none mix-blend-multiply" />
-                  ) : null}
-                  <div className={`absolute inset-0 border-2 border-dashed ${isDraggingSig ? 'border-blue-500 bg-blue-500/10' : 'border-slate-300'} -m-2 rounded pointer-events-none`} />
-                </div>
-             </div>
-          </div>
-          <div className="p-4 bg-slate-900 border-t border-slate-800 text-center">
-             <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mb-3">Drag anywhere on the document to place</p>
-             <button onClick={() => setShowSigModal(false)} className="px-8 py-3 bg-[#6384A3] hover:bg-[#4f6a83] text-white font-bold rounded uppercase tracking-widest text-xs transition-colors">
-               Save Position
-             </button>
+          {/* Draggable Viewport in Modal */}
+          <div className="flex-1 overflow-hidden p-4 flex items-center justify-center relative touch-none select-none">
+             
+             {renderPaginationOverlay()}
+
+             {showViewerGrid ? (
+               <div className="absolute inset-0 z-40 bg-slate-900/95 overflow-y-auto p-4 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 animate-in fade-in">
+                 {pages.map((p, idx) => (
+                   <div key={p.id} onClick={() => { setPreviewPageIndex(idx); setShowViewerGrid(false); }} className={`cursor-pointer border-2 rounded-lg overflow-hidden aspect-[3/4] relative transition-colors ${previewPageIndex === idx ? 'border-blue-400 ring-2 ring-blue-400' : 'border-transparent hover:border-slate-500'}`}>
+                     <img src={p.url} alt={`Thumb ${idx+1}`} className="w-full h-full object-contain bg-slate-800" style={{ transform: `rotate(${p.rotation + p.fineRotation}deg)` }} />
+                     <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded">Page {idx + 1}</div>
+                     {signature.enabled && shouldApplySignature(idx, signature.applyMode, signature.customPages) && (
+                       <div className="absolute top-1 right-1 bg-blue-500 text-white text-[9px] px-1.5 py-0.5 rounded shadow">Signed</div>
+                     )}
+                   </div>
+                 ))}
+               </div>
+             ) : (
+               <div 
+                 ref={modalSigRef}
+                 className="relative shadow-2xl bg-white select-none touch-none"
+                 onPointerDown={() => handlePointerDownSig('modal')}
+                 onPointerMove={handlePointerMoveSig}
+                 onPointerUp={handlePointerUpSig}
+                 onPointerLeave={handlePointerUpSig}
+               >
+                 <img 
+                   src={sigPageTarget.url} 
+                   className="max-h-[85vh] object-contain pointer-events-none" 
+                   style={{ transform: `rotate(${sigPageTarget.rotation + sigPageTarget.fineRotation}deg) scale(${sigPageTarget.scale || 1})` }}
+                   alt="Placement Target" 
+                   draggable={false}
+                 />
+                 
+                 {signature.enabled && appliesToCurrent && renderSignatureOverlay('modal')}
+               </div>
+             )}
           </div>
         </div>
       )}
