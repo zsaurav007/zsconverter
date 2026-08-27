@@ -10,6 +10,15 @@ import { CSS } from '@dnd-kit/utilities'
 import { Settings2, Trash2, Eye, Download, RotateCw, Lock, Unlock, FileText, Type, SlidersHorizontal, X, FileImage, ShieldCheck, Layers, Scissors, Wand2, Hash, Edit3 } from 'lucide-react'
 import CustomDropdown from './CustomDropdown'
 
+// --- HELPER FUNCTION ---
+const createImage = (url: string): Promise<HTMLImageElement> =>
+  new Promise((resolve, reject) => {
+    const image = new Image()
+    image.addEventListener('load', () => resolve(image))
+    image.addEventListener('error', (error) => reject(error))
+    image.src = url
+  })
+
 // --- SORTABLE GRID ITEM ---
 interface SortableItemProps {
   id: string
@@ -242,9 +251,7 @@ export default function PdfEditor() {
     for (let i = 0; i < pagesToExport.length; i++) {
       const { url, rotation, fineRotation, scale } = pagesToExport[i]
       
-      const img = new Image()
-      img.src = url
-      await new Promise((resolve) => { img.onload = resolve })
+      const img = await createImage(url)
 
       const canvas = document.createElement('canvas')
       const ctx = canvas.getContext('2d')
