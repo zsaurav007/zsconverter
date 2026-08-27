@@ -65,6 +65,14 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
   // Base Name for Exporting
   const baseName = file.name.substring(0, file.name.lastIndexOf('.')) || file.name
 
+  // Track real dimensions of current state
+  const [imgDims, setImgDims] = useState({ w: 0, h: 0 })
+  useEffect(() => {
+    const img = new Image()
+    img.onload = () => setImgDims({ w: img.width, h: img.height })
+    img.src = currentImage
+  }, [currentImage])
+
   // Transform State
   const [liveTransform, setLiveTransform] = useState({ rotate: 0, flipH: false, flipV: false, radius: 0 })
 
@@ -88,13 +96,15 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
   const defaultFilters = { b: 100, c: 100, s: 100, sep: 0 }
   const [liveFilters, setLiveFilters] = useState(defaultFilters)
 
-  // Export & Conversion State
-  const [exportFormat, setExportFormat] = useState<string>('image/webp')
-  const [compressionQuality, setCompressionQuality] = useState<number>(85)
+  // Resize State
   const [resizeWidth, setResizeWidth] = useState<number | ''>('')
   const [resizeHeight, setResizeHeight] = useState<number | ''>('')
   const [maintainRatio, setMaintainRatio] = useState(true)
   const [presetSize, setPresetSize] = useState('custom')
+
+  // Export & Conversion State
+  const [exportFormat, setExportFormat] = useState<string>('image/webp')
+  const [compressionQuality, setCompressionQuality] = useState<number>(85)
 
   // Preview Size State
   const [estimatedSize, setEstimatedSize] = useState<number | null>(null)
@@ -202,12 +212,48 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
     setLiveFilters(defaultFilters)
   }
 
-  const handleBgImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      setBgImage(URL.createObjectURL(e.target.files[0]))
-      setBgType('image')
-      setBgImageScale(100)
+  const handleApplyResize = async () => {
+    const img = await createImage(currentImage)
+    let targetWidth = img.width
+    let targetHeight = img.height
+    
+    const rw = typeof resizeWidth === 'number' ? resizeWidth : null;
+    const rh = typeof resizeHeight === 'number' ? resizeHeight : null;
+
+    if (!rw && !rh) {
+      setActiveTool('export')
+      return
     }
+
+    if (maintainRatio) {
+      if (rw && rh) {
+        const ratio = Math.min(rw / img.width, rh / img.height);
+        targetWidth = Math.max(1, Math.round(img.width * ratio));
+        targetHeight = Math.max(1, Math.round(img.height * ratio));
+      } else if (rw) {
+        targetWidth = rw;
+        targetHeight = Math.max(1, Math.round((img.height * rw) / img.width));
+      } else if (rh) {
+        targetHeight = rh;
+        targetWidth = Math.max(1, Math.round((img.width * rh) / img.height));
+      }
+    } else {
+      targetWidth = rw || img.width;
+      targetHeight = rh || img.height;
+    }
+
+    const canvas = document.createElement('canvas')
+    canvas.width = targetWidth
+    canvas.height = targetHeight
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    
+    ctx.drawImage(img, 0, 0, targetWidth, targetHeight)
+    pushToGlobalHistory(canvas.toDataURL('image/png'))
+    setActiveTool('export')
+    setPresetSize('custom')
+    setResizeWidth('')
+    setResizeHeight('')
   }
 
   const handlePresetChange = (val: string) => {
@@ -220,6 +266,14 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
     } else {
       setResizeWidth('')
       setResizeHeight('')
+    }
+  }
+
+  const handleBgImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      setBgImage(URL.createObjectURL(e.target.files[0]))
+      setBgType('image')
+      setBgImageScale(100)
     }
   }
 
@@ -263,31 +317,8 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
 
   const generateOutputBlob = async (): Promise<Blob | null> => {
     const img = await createImage(currentImage)
-    
-    let targetWidth = img.width
-    let targetHeight = img.height
-    
-    const rw = typeof resizeWidth === 'number' ? resizeWidth : null;
-    const rh = typeof resizeHeight === 'number' ? resizeHeight : null;
-
-    if (rw || rh) {
-      if (maintainRatio) {
-        if (rw && rh) {
-          const ratio = Math.min(rw / img.width, rh / img.height);
-          targetWidth = Math.max(1, Math.round(img.width * ratio));
-          targetHeight = Math.max(1, Math.round(img.height * ratio));
-        } else if (rw) {
-          targetWidth = rw;
-          targetHeight = Math.max(1, Math.round((img.height * rw) / img.width));
-        } else if (rh) {
-          targetHeight = rh;
-          targetWidth = Math.max(1, Math.round((img.width * rh) / img.height));
-        }
-      } else {
-        targetWidth = rw || img.width;
-        targetHeight = rh || img.height;
-      }
-    }
+    const targetWidth = img.width
+    const targetHeight = img.height
 
     if (exportFormat === 'application/pdf') {
       const pdf = new jsPDF({ orientation: targetWidth > targetHeight ? 'landscape' : 'portrait', unit: 'px', format: [targetWidth, targetHeight] })
@@ -348,8 +379,7 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
 
     let mimeType = exportFormat
     let quality = compressionQuality / 100
-    if (exportFormat === 'image/webp-lossless' || exportFormat === 'image/png') quality = 1.0
-    if (exportFormat === 'image/webp-lossless') mimeType = 'image/webp'
+    if (exportFormat === 'image/png') quality = 1.0
 
     return new Promise<Blob | null>(resolve => canvas.toBlob(resolve, mimeType, quality))
   }
@@ -373,8 +403,7 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
 
     const timer = setTimeout(calculate, 600);
     return () => { isMounted = false; clearTimeout(timer); }
-  }, [currentImage, exportFormat, compressionQuality, bgType, bgColor, bgGradientColor1, bgGradientColor2, bgImage, bgImageScale, resizeWidth, resizeHeight, maintainRatio])
-
+  }, [currentImage, exportFormat, compressionQuality, bgType, bgColor, bgGradientColor1, bgGradientColor2, bgImage, bgImageScale])
 
   const handleExport = async () => {
     const blob = await generateOutputBlob()
@@ -388,17 +417,17 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
     link.href = finalUrl
     
     let ext = exportFormat.split('/')[1]
-    if (exportFormat === 'image/webp-lossless') ext = 'webp'
     if (exportFormat === 'application/pdf') ext = 'pdf'
     if (exportFormat === 'image/x-icon') ext = 'ico'
     
     link.download = `${baseName}_zs_converter.${ext}`
     link.click()
     
-    onComplete(finalUrl)
+    // Explicitly NOT calling onComplete(finalUrl)
+    // This perfectly prevents the editor from unmounting or "disappearing"
   }
 
-  const isLosslessFormat = exportFormat === 'image/png' || exportFormat === 'image/webp-lossless' || exportFormat === 'application/pdf' || exportFormat === 'image/x-icon'
+  const isLosslessFormat = exportFormat === 'image/png' || exportFormat === 'application/pdf' || exportFormat === 'image/x-icon'
   const sourceFormatDisplay = file.type.split('/')[1]?.toUpperCase() || 'UNKNOWN'
 
   const previewStyle = {
@@ -682,6 +711,13 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
                     Maintain Ratio (Fit Inside)
                   </label>
                 </div>
+                <div className="flex gap-2 pt-2 border-t border-slate-100 mt-2">
+                  <button onClick={() => { setResizeWidth(''); setResizeHeight(''); setPresetSize('custom'); }} className="flex-[0.5] py-2 text-[10px] uppercase tracking-wider font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50 flex justify-center items-center" title="Reset">
+                    <RefreshCcw className="w-3.5 h-3.5" />
+                  </button>
+                  <button onClick={() => { setActiveTool('export'); setResizeWidth(''); setResizeHeight(''); }} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50">Cancel</button>
+                  <button onClick={handleApplyResize} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-white bg-[#6384A3] rounded hover:bg-[#4f6a83]">Apply Resize</button>
+                </div>
               </div>
             )}
           </div>
@@ -693,6 +729,11 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
             </button>
             {activeTool === 'export' && (
               <div className="p-4 bg-white border-t border-slate-100 space-y-4 rounded-b-lg">
+                <div className="flex justify-between text-[10px] font-bold text-slate-500 uppercase tracking-widest border-b border-slate-200 pb-2">
+                  <span>Current Dimensions</span>
+                  <span className="text-[#6384A3]">{imgDims.w} x {imgDims.h} px</span>
+                </div>
+
                 <div className="space-y-2">
                   <div className="flex justify-between items-center text-xs">
                     <span className="text-slate-500 font-bold text-[10px] uppercase tracking-widest">Source Format: <span className="text-[#6384A3]">{sourceFormatDisplay}</span></span>
@@ -704,7 +745,6 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
                     options={[
                       { value: 'image/png', label: 'PNG (Lossless, Largest)' },
                       { value: 'image/webp', label: 'WebP (Optimized, Transparent)' },
-                      { value: 'image/webp-lossless', label: 'WebP (Strictly Lossless)' },
                       { value: 'image/jpeg', label: 'JPG / JPEG (No Transparency)' },
                       { value: 'image/x-icon', label: 'ICO Favicon (32x32)' },
                       { value: 'application/pdf', label: 'PDF Document' }
@@ -712,19 +752,17 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
                   />
                 </div>
 
-                {!isLosslessFormat && (
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest">
-                      <span className="text-slate-500">Output Quality</span>
-                      <span className="text-[#6384A3]">{compressionQuality}%</span>
-                    </div>
-                    <input type="range" value={compressionQuality} min={10} max={100} onChange={(e) => setCompressionQuality(Number(e.target.value))} className="w-full accent-[#6384A3]" />
+                <div className="space-y-2">
+                  <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest">
+                    <span className="text-slate-500">Output Quality</span>
+                    <span className="text-[#6384A3]">{compressionQuality}%</span>
                   </div>
-                )}
+                  <input type="range" value={compressionQuality} min={10} max={100} onChange={(e) => setCompressionQuality(Number(e.target.value))} className="w-full accent-[#6384A3]" />
+                </div>
 
                 <div className="bg-slate-100 rounded border border-slate-200 p-3 space-y-1.5 shadow-inner">
                   <div className="flex justify-between text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                    <span>Original Size</span>
+                    <span>Original File Size</span>
                     <span>{formatBytes(file.size)}</span>
                   </div>
                   <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest">
