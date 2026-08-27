@@ -7,7 +7,7 @@ import JSZip from 'jszip'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, useSortable, rectSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Settings2, Trash2, Eye, Download, RotateCw, Lock, Unlock, FileText, Type, SlidersHorizontal, X, FileImage, ShieldCheck, Layers } from 'lucide-react'
+import { Settings2, Trash2, Eye, Download, RotateCw, Lock, Unlock, FileText, Type, SlidersHorizontal, X, FileImage, ShieldCheck, Layers, Scissors, Wand2, Hash, Edit3 } from 'lucide-react'
 import CustomDropdown from './CustomDropdown'
 
 // --- SORTABLE GRID ITEM ---
@@ -16,11 +16,14 @@ interface SortableItemProps {
   url: string
   index: number
   rotation: number
+  fineRotation: number
+  scale: number
   onRemove: (id: string) => void
   onRotate: (id: string) => void
+  onEdit: (id: string) => void
 }
 
-function SortablePageItem({ id, url, index, rotation, onRemove, onRotate }: SortableItemProps) {
+function SortablePageItem({ id, url, index, rotation, fineRotation, scale, onRemove, onRotate, onEdit }: SortableItemProps) {
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id })
   
   const style = {
@@ -39,12 +42,12 @@ function SortablePageItem({ id, url, index, rotation, onRemove, onRotate }: Sort
       {...listeners} 
       className="relative rounded-lg overflow-hidden border border-slate-200 aspect-[3/4] cursor-grab active:cursor-grabbing hover:shadow-md transition-shadow bg-slate-100 flex items-center justify-center group"
     >
-      <div className="w-full h-full flex items-center justify-center">
+      <div className="w-full h-full flex items-center justify-center overflow-hidden bg-white">
         <img 
           src={url} 
           alt={`Page ${index + 1}`} 
           className="max-w-full max-h-full object-contain pointer-events-none transition-transform" 
-          style={{ transform: `rotate(${rotation}deg) scale(${imageScale})` }}
+          style={{ transform: `rotate(${rotation + fineRotation}deg) scale(${imageScale * scale})` }}
         />
       </div>
       
@@ -63,17 +66,25 @@ function SortablePageItem({ id, url, index, rotation, onRemove, onRotate }: Sort
         >
           <RotateCw className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
         </button>
+        <button 
+          onPointerDown={(e) => { e.stopPropagation(); onEdit(id) }}
+          className="bg-[#6384A3]/90 hover:bg-[#4f6a83] text-white rounded-full w-7 h-7 lg:w-6 lg:h-6 flex items-center justify-center shadow-md transition-colors"
+          title="Straighten & Crop Page"
+        >
+          <Edit3 className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
+        </button>
       </div>
 
-      <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-2 py-0.5 rounded font-bold shadow-sm">
+      <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-2 py-0.5 rounded font-bold shadow-sm flex items-center gap-1">
         {index + 1}
+        {(fineRotation !== 0 || scale !== 1) && <span className="text-[#6384A3] ml-1">Edited</span>}
       </div>
     </div>
   )
 }
 
 // --- MAIN COMPONENT ---
-type PageItem = { id: string; url: string; isLossless: boolean; rotation: number }
+type PageItem = { id: string; url: string; isLossless: boolean; rotation: number; fineRotation: number; scale: number }
 
 export default function PdfEditor() {
   const [pages, setPages] = useState<PageItem[]>([])
@@ -81,11 +92,10 @@ export default function PdfEditor() {
   const [loadingText, setLoadingText] = useState('')
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   
-  // File Naming State
   const [originalDocName, setOriginalDocName] = useState('document')
 
-  // Expanded Accordion State to include Merge
-  const [activePanel, setActivePanel] = useState<'security' | 'watermark' | 'compression' | 'merge' | null>(null)
+  // Expanded Accordion State
+  const [activePanel, setActivePanel] = useState<'security' | 'overlays' | 'compression' | 'merge' | 'split' | 'enhance' | null>(null)
 
   const [unlockPassword, setUnlockPassword] = useState('')
   const [encryptPassword, setEncryptPassword] = useState('')
@@ -93,18 +103,25 @@ export default function PdfEditor() {
   const [watermarkText, setWatermarkText] = useState('')
   const [watermarkPlacement, setWatermarkPlacement] = useState('center')
   const [watermarkOpacity, setWatermarkOpacity] = useState(30)
+  const [addPageNumbers, setAddPageNumbers] = useState(false)
   
   const [enableCompression, setEnableCompression] = useState(false)
   const [compressionQuality, setCompressionQuality] = useState(70)
+
+  const [cleanWatermarks, setCleanWatermarks] = useState(false)
+  const [splitRanges, setSplitRanges] = useState('')
+
+  const [exportFormat, setExportFormat] = useState('pdf')
+
+  // Straighten & Scale Modal State
+  const [editingPageId, setEditingPageId] = useState<string | null>(null)
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
       import('pdfjs-dist').then((pdfjsLib) => {
-        // Smart feature detection for older browsers (Windows 7 / Legacy support)
         const isModernBrowser = 'noModule' in HTMLScriptElement.prototype
-        
         pdfjsLib.GlobalWorkerOptions.workerSrc = isModernBrowser 
           ? `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`
           : `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/legacy/build/pdf.worker.min.js`
@@ -116,7 +133,6 @@ export default function PdfEditor() {
     if (acceptedFiles.length === 0) return
     setIsProcessing(true)
 
-    // Capture the original filename for export
     if (!originalDocName || originalDocName === 'document') {
       const firstFileName = acceptedFiles[0].name
       const baseName = firstFileName.substring(0, firstFileName.lastIndexOf('.')) || firstFileName
@@ -159,7 +175,9 @@ export default function PdfEditor() {
               id: `pdf-page-${Date.now()}-${Math.random()}`,
               url: canvas.toDataURL('image/png'),
               isLossless: true,
-              rotation: 0
+              rotation: 0,
+              fineRotation: 0,
+              scale: 1
             })
           }
         } else if (file.type.startsWith('image/')) {
@@ -168,7 +186,9 @@ export default function PdfEditor() {
             id: `image-${file.name}-${Date.now()}`,
             url: URL.createObjectURL(file),
             isLossless: file.type === 'image/png' || file.type === 'image/webp',
-            rotation: 0
+            rotation: 0,
+            fineRotation: 0,
+            scale: 1
           })
         }
       }
@@ -203,18 +223,24 @@ export default function PdfEditor() {
   const rotatePage = (idToRotate: string) => {
     setPages(items => items.map(item => item.id === idToRotate ? { ...item, rotation: (item.rotation + 90) % 360 } : item))
   }
+  const updateFineRotation = (id: string, deg: number) => {
+    setPages(items => items.map(item => item.id === id ? { ...item, fineRotation: deg } : item))
+  }
+  const updateScale = (id: string, scale: number) => {
+    setPages(items => items.map(item => item.id === id ? { ...item, scale: scale } : item))
+  }
   const clearAll = () => {
     setPages([])
     setOriginalDocName('document')
   }
 
-  const generatePdfBlob = async (): Promise<Blob | null> => {
-    if (pages.length === 0) return null
+  const generatePdfBlob = async (pagesToExport: PageItem[] = pages): Promise<Blob | null> => {
+    if (pagesToExport.length === 0) return null
 
     let pdf: jsPDF | null = null;
     
-    for (let i = 0; i < pages.length; i++) {
-      const { url, rotation } = pages[i]
+    for (let i = 0; i < pagesToExport.length; i++) {
+      const { url, rotation, fineRotation, scale } = pagesToExport[i]
       
       const img = new Image()
       img.src = url
@@ -232,10 +258,39 @@ export default function PdfEditor() {
       ctx.fillRect(0, 0, canvas.width, canvas.height)
 
       ctx.translate(canvas.width / 2, canvas.height / 2)
-      ctx.rotate((rotation * Math.PI) / 180)
+      ctx.rotate(((rotation + fineRotation) * Math.PI) / 180)
+      const currentScale = scale || 1
+      ctx.scale(currentScale, currentScale)
       ctx.drawImage(img, -img.width / 2, -img.height / 2, img.width, img.height)
       ctx.setTransform(1, 0, 0, 1, 0, 0)
       
+      // Watermark Removal / Clean Scan
+      if (cleanWatermarks) {
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+        const data = imgData.data
+        for (let j = 0; j < data.length; j += 4) {
+          const r = data[j], g = data[j+1], b = data[j+2]
+          if (r > 160 && g > 160 && b > 160) {
+            data[j] = 255; data[j+1] = 255; data[j+2] = 255;
+          } 
+          else if (r < 100 && g < 100 && b < 100) {
+            data[j] = 0; data[j+1] = 0; data[j+2] = 0;
+          }
+        }
+        ctx.putImageData(imgData, 0, 0)
+      }
+
+      // Add Page Numbers
+      if (addPageNumbers) {
+        const fontSize = Math.max(Math.floor(canvas.width / 35), 12)
+        ctx.font = `bold ${fontSize}px sans-serif`
+        ctx.fillStyle = '#000000'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'bottom'
+        ctx.fillText(`${i + 1} / ${pagesToExport.length}`, canvas.width / 2, canvas.height - fontSize)
+      }
+
+      // Add Watermark
       if (watermarkText) {
         const fontSize = Math.max(Math.floor(canvas.width / 15), 20)
         ctx.font = `bold ${fontSize}px sans-serif`
@@ -287,6 +342,107 @@ export default function PdfEditor() {
     return pdf ? pdf.output('blob') : null
   }
 
+  const exportAsWord = async () => {
+    setIsProcessing(true)
+    setLoadingText('Building Word Document...')
+    try {
+      let htmlContent = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+      <head><meta charset='utf-8'><title>Exported Doc</title></head><body>`
+      
+      for (let i = 0; i < pages.length; i++) {
+        const { url, rotation, fineRotation, scale } = pages[i]
+        const img = await createImage(url)
+        const canvas = document.createElement('canvas')
+        const ctx = canvas.getContext('2d')
+        if (!ctx) continue
+
+        canvas.width = img.width; canvas.height = img.height
+        ctx.fillStyle = '#FFFFFF'; ctx.fillRect(0, 0, canvas.width, canvas.height)
+        ctx.translate(canvas.width/2, canvas.height/2)
+        ctx.rotate(((rotation + fineRotation) * Math.PI) / 180)
+        const currentScale = scale || 1
+        ctx.scale(currentScale, currentScale)
+        ctx.drawImage(img, -img.width/2, -img.height/2, img.width, img.height)
+        
+        const b64 = canvas.toDataURL('image/jpeg', 0.85)
+        htmlContent += `<img src="${b64}" style="width:100%; max-width:800px; page-break-after:always; display:block; margin-bottom:20px;" />`
+      }
+      
+      htmlContent += `</body></html>`
+      
+      const blob = new Blob(['\ufeff', htmlContent], { type: 'application/msword' })
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(blob)
+      link.download = `${originalDocName}_zs_converter.doc`
+      link.click()
+    } catch(e) {
+      alert("Word export failed.")
+    } finally {
+      setIsProcessing(false)
+      setLoadingText('')
+    }
+  }
+
+  const handleSplitPdf = async () => {
+    if (!splitRanges.trim()) return alert("Please enter valid page ranges (e.g., 1-3, 5).")
+    
+    setIsProcessing(true)
+    setLoadingText('Splitting PDF...')
+    try {
+      const ranges = splitRanges.split(',').map(r => r.trim())
+      const zip = new JSZip()
+      
+      for (let i = 0; i < ranges.length; i++) {
+        const rangeStr = ranges[i]
+        const parts = rangeStr.split('-').map(n => parseInt(n, 10))
+        let start = 1, end = 1
+        
+        if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+          start = parts[0]; end = parts[1];
+        } else if (parts.length === 1 && !isNaN(parts[0])) {
+          start = parts[0]; end = parts[0];
+        } else {
+          continue;
+        }
+
+        start = Math.max(1, Math.min(start, pages.length))
+        end = Math.max(1, Math.min(end, pages.length))
+        
+        const actualStart = Math.min(start, end)
+        const actualEnd = Math.max(start, end)
+        
+        const slice = pages.slice(actualStart - 1, actualEnd)
+        if (slice.length > 0) {
+          const splitBlob = await generatePdfBlob(slice)
+          if (splitBlob) {
+            zip.file(`${originalDocName}_split_${actualStart}-${actualEnd}.pdf`, splitBlob)
+          }
+        }
+      }
+      
+      const zipContent = await zip.generateAsync({ type: 'blob' })
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(zipContent)
+      link.download = `${originalDocName}_splits_zs_converter.zip`
+      link.click()
+    } catch (e) {
+      alert("Split operation failed. Please check your range formatting.")
+    } finally {
+      setIsProcessing(false)
+      setLoadingText('')
+    }
+  }
+
+  const handleMainExport = () => {
+    if (exportFormat === 'pdf') {
+      exportAsPdf()
+    } else if (exportFormat === 'images') {
+      exportAsImages()
+    } else if (exportFormat === 'word') {
+      exportAsWord()
+    }
+  }
+
   const handlePreview = async () => {
     setIsProcessing(true)
     setLoadingText('Generating Preview...')
@@ -336,7 +492,7 @@ export default function PdfEditor() {
       const downloadUrl = URL.createObjectURL(zipContent)
       const link = document.createElement('a')
       link.href = downloadUrl
-      link.download = `${originalDocName}_zs_converter_pages.zip`
+      link.download = `${originalDocName}_images_zs_converter.zip`
       link.click()
     } catch (error) {
       alert("Failed to export images.")
@@ -345,6 +501,8 @@ export default function PdfEditor() {
       setLoadingText('')
     }
   }
+
+  const editingPageData = editingPageId ? pages.find(p => p.id === editingPageId) : null
 
   return (
     <>
@@ -358,7 +516,7 @@ export default function PdfEditor() {
             </h4>
           </div>
 
-          <div className="space-y-3 flex-1 overflow-y-auto pr-1">
+          <div className="space-y-3 flex-1 overflow-y-auto pr-1 pb-4">
             
             {/* Merge Accordion */}
             <div className="border border-slate-200 rounded-lg overflow-hidden flex-shrink-0 bg-white shadow-sm">
@@ -374,19 +532,48 @@ export default function PdfEditor() {
                   >
                     + Add Files to Merge
                   </button>
-                  <input 
-                    type="file" 
-                    id="merge-file-upload" 
-                    multiple 
-                    accept=".pdf,image/jpeg,image/png,image/webp" 
-                    className="hidden" 
+                  <input type="file" id="merge-file-upload" multiple accept=".pdf,image/jpeg,image/png,image/webp" className="hidden" 
                     onChange={(e) => {
                       if (e.target.files && e.target.files.length > 0) {
                         onDrop(Array.from(e.target.files));
-                        e.target.value = ''; // Reset input so same file can be selected again
+                        e.target.value = '';
                       }
                     }} 
                   />
+                </div>
+              )}
+            </div>
+
+            {/* Split Accordion */}
+            <div className="border border-slate-200 rounded-lg overflow-hidden flex-shrink-0 bg-white shadow-sm">
+              <button onClick={() => setActivePanel(activePanel === 'split' ? null : 'split')} className="w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors">
+                <Scissors className="w-4 h-4 text-[#6384A3]" /> Split Document
+              </button>
+              {activePanel === 'split' && (
+                <div className="p-4 space-y-4 border-t border-slate-100">
+                  <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">Ranges to extract (e.g. 1-2, 5, 8-10)</p>
+                  <input type="text" placeholder="1-3, 5-6" value={splitRanges} onChange={(e) => setSplitRanges(e.target.value)} className="w-full p-2 border border-slate-200 rounded text-sm bg-white" />
+                  <button onClick={handleSplitPdf} disabled={isProcessing || pages.length === 0} className="w-full py-2 bg-slate-800 text-white font-bold text-[10px] uppercase tracking-widest rounded-lg hover:bg-black transition-colors shadow-sm">
+                    Download Split ZIP
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Enhance & Clean Accordion */}
+            <div className="border border-slate-200 rounded-lg overflow-hidden flex-shrink-0 bg-white shadow-sm">
+              <button onClick={() => setActivePanel(activePanel === 'enhance' ? null : 'enhance')} className="w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors">
+                <Wand2 className="w-4 h-4 text-[#6384A3]" /> Scan Cleaner
+              </button>
+              {activePanel === 'enhance' && (
+                <div className="p-4 space-y-4 border-t border-slate-100">
+                  <label className="flex items-start gap-2 text-xs font-bold text-slate-700 cursor-pointer">
+                    <input type="checkbox" checked={cleanWatermarks} onChange={(e) => setCleanWatermarks(e.target.checked)} className="w-4 h-4 mt-0.5 accent-[#6384A3] rounded" />
+                    <div>
+                      <span className="uppercase tracking-wider">Remove Faint Watermarks</span>
+                      <p className="text-[9px] text-slate-400 font-normal mt-1 leading-tight">Washes out light colors, shadows, and faint watermarks while preserving dark text for scanned documents.</p>
+                    </div>
+                  </label>
                 </div>
               )}
             </div>
@@ -414,19 +601,24 @@ export default function PdfEditor() {
               )}
             </div>
 
-            {/* Watermark Accordion */}
+            {/* Overlays Accordion */}
             <div className="border border-slate-200 rounded-lg overflow-hidden flex-shrink-0 bg-white shadow-sm">
-              <button onClick={() => setActivePanel(activePanel === 'watermark' ? null : 'watermark')} className="w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors">
-                <Type className="w-4 h-4 text-[#6384A3]" /> Watermark
+              <button onClick={() => setActivePanel(activePanel === 'overlays' ? null : 'overlays')} className="w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors">
+                <Type className="w-4 h-4 text-[#6384A3]" /> Text Overlays
               </button>
-              {activePanel === 'watermark' && (
+              {activePanel === 'overlays' && (
                 <div className="p-4 space-y-4 border-t border-slate-100">
+                  <label className="flex items-center gap-2 text-xs font-bold text-slate-700 uppercase tracking-wider cursor-pointer border-b border-slate-100 pb-3">
+                    <input type="checkbox" checked={addPageNumbers} onChange={(e) => setAddPageNumbers(e.target.checked)} className="w-4 h-4 accent-[#6384A3] rounded" />
+                    <Hash className="w-3 h-3 text-[#6384A3]" /> Stamp Page Numbers
+                  </label>
+                  
                   <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Text</label>
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Add Watermark Text</label>
                     <input type="text" placeholder="e.g. CONFIDENTIAL" value={watermarkText} onChange={(e) => setWatermarkText(e.target.value)} className="w-full p-2 border border-slate-200 rounded text-sm bg-white" />
                   </div>
                   <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Placement</label>
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Watermark Placement</label>
                     <CustomDropdown 
                       value={watermarkPlacement} 
                       onChange={setWatermarkPlacement} 
@@ -480,15 +672,27 @@ export default function PdfEditor() {
 
           {/* Export Actions */}
           <div className="mt-auto pt-4 border-t border-slate-200 flex-shrink-0 space-y-3">
-            <button onClick={handlePreview} disabled={isProcessing || pages.length === 0} className="w-full py-3 lg:py-2.5 border border-slate-200 bg-white text-slate-700 font-bold text-xs uppercase tracking-widest rounded-lg hover:bg-slate-100 disabled:opacity-50 transition-colors flex items-center justify-center gap-2 shadow-sm">
-              <Eye className="w-4 h-4" /> Preview Doc
-            </button>
+            
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Main Export Format</label>
+              <CustomDropdown 
+                value={exportFormat} 
+                onChange={setExportFormat} 
+                direction="up"
+                options={[
+                  { value: 'pdf', label: 'PDF Document (.pdf)' },
+                  { value: 'word', label: 'Word Document (.doc)' },
+                  { value: 'images', label: 'Image Archive (.zip)' },
+                ]} 
+              />
+            </div>
+            
             <div className="flex gap-2">
-              <button onClick={exportAsImages} disabled={isProcessing || pages.length === 0} className="flex-1 py-3 bg-slate-800 text-white font-bold text-xs uppercase tracking-widest rounded-lg hover:bg-black disabled:opacity-50 transition-colors shadow-sm" title="Export as Image ZIP">
-                <FileImage className="w-4 h-4 mx-auto" />
+              <button onClick={handlePreview} disabled={isProcessing || pages.length === 0} className="flex-[0.5] py-2.5 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 disabled:opacity-50 transition-colors flex items-center justify-center shadow-sm" title="Preview File">
+                <Eye className="w-4 h-4" />
               </button>
-              <button onClick={exportAsPdf} disabled={isProcessing || pages.length === 0} className="flex-[3] py-3 bg-[#6384A3] text-white font-bold text-xs uppercase tracking-widest rounded-lg hover:bg-[#4f6a83] disabled:opacity-50 shadow-md transition-colors flex items-center justify-center gap-2">
-                <FileText className="w-4 h-4" /> Save PDF
+              <button onClick={handleMainExport} disabled={isProcessing || pages.length === 0} className="flex-1 py-2.5 bg-[#6384A3] text-white font-bold text-xs uppercase tracking-widest rounded-lg hover:bg-[#4f6a83] disabled:opacity-50 shadow-md transition-colors flex items-center justify-center gap-2">
+                <Download className="w-4 h-4" /> Export File
               </button>
             </div>
           </div>
@@ -526,8 +730,11 @@ export default function PdfEditor() {
                         url={page.url} 
                         index={index}
                         rotation={page.rotation}
+                        fineRotation={page.fineRotation || 0}
+                        scale={page.scale || 1}
                         onRemove={removePage} 
                         onRotate={rotatePage}
+                        onEdit={setEditingPageId}
                       />
                     ))}
                     
@@ -555,19 +762,106 @@ export default function PdfEditor() {
         </div>
       </div>
 
-      {/* Fullscreen Preview Modal */}
+      {/* Editing Modal (Fine Straighten & Scale Tool) */}
+      {editingPageData && (
+        <div className="fixed inset-0 z-[150] bg-slate-900/90 flex flex-col items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col">
+            <div className="flex justify-between items-center p-4 border-b border-slate-200">
+              <h3 className="text-sm font-bold text-slate-800 uppercase tracking-widest flex items-center gap-2">
+                <Edit3 className="w-4 h-4 text-[#6384A3]" /> Straighten & Crop
+              </h3>
+              <button onClick={() => setEditingPageId(null)} className="text-slate-400 hover:text-red-500 transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            {/* Precision Viewport Canvas */}
+            <div className="p-4 sm:p-6 bg-slate-800 flex items-center justify-center relative overflow-hidden" style={{ minHeight: '350px' }}>
+              {/* Reference Grid pattern background */}
+              <div className="absolute inset-0 pointer-events-none opacity-10" style={{ backgroundImage: 'linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
+              
+              {/* Frame Box */}
+              <div className="relative inline-block border-2 border-transparent overflow-visible shadow-2xl">
+                
+                {/* 1. Base Hidden Image - Dictates the Aspect Ratio of the PDF Page frame */}
+                <img src={editingPageData.url} className="max-h-[40vh] sm:max-h-[45vh] opacity-0 pointer-events-none" alt="" />
+                
+                {/* 2. The Transformed Image Layer */}
+                <div className="absolute inset-0 flex items-center justify-center overflow-visible">
+                   <img 
+                     src={editingPageData.url} 
+                     className="w-full h-full object-contain max-w-none max-h-none pointer-events-none" 
+                     style={{ transform: `rotate(${editingPageData.rotation + editingPageData.fineRotation}deg) scale(${editingPageData.scale || 1})` }} 
+                     alt="Editing preview"
+                   />
+                </div>
+
+                {/* 3. The Dimmer Mask - Uses extreme CSS Box Shadow to dim anything outside the box */}
+                <div className="absolute inset-0 pointer-events-none shadow-[0_0_0_9999px_rgba(0,0,0,0.65)] z-10 border border-white/50" />
+                
+                {/* 4. Crosshair Guides */}
+                <div className="absolute inset-0 pointer-events-none border border-[#6384A3] z-20 flex items-center justify-center">
+                   <div className="w-full h-px bg-[#6384A3]/50 absolute top-1/2 -translate-y-1/2" />
+                   <div className="h-full w-px bg-[#6384A3]/50 absolute left-1/2 -translate-x-1/2" />
+                </div>
+              </div>
+            </div>
+            
+            <div className="p-6 space-y-5 bg-white border-t border-slate-200">
+              <div className="space-y-2">
+                <div className="flex justify-between text-xs font-bold text-slate-600 uppercase tracking-widest">
+                  <span>Fine Rotation Angle</span>
+                  <span className="text-[#6384A3]">{editingPageData.fineRotation}°</span>
+                </div>
+                <input 
+                  type="range" 
+                  min="-45" 
+                  max="45" 
+                  step="0.5" 
+                  value={editingPageData.fineRotation} 
+                  onChange={(e) => updateFineRotation(editingPageData.id, Number(e.target.value))} 
+                  className="w-full accent-[#6384A3]" 
+                />
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex justify-between text-xs font-bold text-slate-600 uppercase tracking-widest">
+                  <span>Zoom / Scale</span>
+                  <span className="text-[#6384A3]">{(editingPageData.scale || 1).toFixed(2)}x</span>
+                </div>
+                <input 
+                  type="range" 
+                  min="0.5" 
+                  max="3" 
+                  step="0.05" 
+                  value={editingPageData.scale || 1} 
+                  onChange={(e) => updateScale(editingPageData.id, Number(e.target.value))} 
+                  className="w-full accent-[#6384A3]" 
+                />
+              </div>
+
+              <div className="flex gap-2 pt-2 border-t border-slate-100">
+                <button onClick={() => { updateFineRotation(editingPageData.id, 0); updateScale(editingPageData.id, 1); }} className="flex-[0.5] py-2.5 px-4 text-xs font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50 uppercase tracking-widest">Reset</button>
+                <button onClick={() => setEditingPageId(null)} className="flex-1 py-2.5 text-xs font-bold text-white bg-[#6384A3] rounded hover:bg-[#4f6a83] uppercase tracking-widest">Done</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Fullscreen Preview Modal (Light Theme) */}
       {previewUrl && (
-        <div className="fixed inset-0 z-[120] bg-slate-900/95 flex flex-col animate-in fade-in zoom-in-95 duration-200">
-          <div className="flex justify-between items-center p-4 bg-slate-900 border-b border-slate-800 flex-shrink-0 shadow-lg">
-            <h3 className="text-white font-bold text-sm uppercase tracking-widest flex items-center gap-2">
-              <Eye className="w-4 h-4" /> Document Preview
+        <div className="fixed inset-0 z-[120] bg-slate-100/95 backdrop-blur-sm flex flex-col animate-in fade-in zoom-in-95 duration-200">
+          <div className="flex justify-between items-center p-4 bg-white border-b border-slate-200 flex-shrink-0 shadow-sm">
+            <h3 className="text-slate-800 font-bold text-sm uppercase tracking-widest flex items-center gap-2">
+              <Eye className="w-4 h-4 text-[#6384A3]" /> Document Preview
             </h3>
-            <button onClick={() => setPreviewUrl(null)} className="text-slate-400 hover:text-white transition-colors bg-slate-800 p-2 rounded-full">
+            <button onClick={() => setPreviewUrl(null)} className="text-slate-500 hover:text-red-500 transition-colors bg-slate-100 p-2 rounded-full">
               <X className="w-5 h-5" />
             </button>
           </div>
           <div className="flex-1 p-2 md:p-8 flex justify-center">
-            <iframe src={previewUrl} className="w-full max-w-4xl h-full rounded shadow-2xl bg-white" title="PDF Preview" />
+            <iframe src={previewUrl} className="w-full max-w-4xl h-full rounded border border-slate-200 shadow-2xl bg-white" title="PDF Preview" />
           </div>
         </div>
       )}
