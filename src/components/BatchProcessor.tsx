@@ -3,7 +3,7 @@
 import { useState, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
 import JSZip from 'jszip'
-import { Settings2, UploadCloud, Layers, Eraser, Trash2 } from 'lucide-react'
+import { Settings2, UploadCloud, Layers, Eraser, Trash2, Maximize } from 'lucide-react'
 import { removeBackground, Config } from '@imgly/background-removal'
 import CustomDropdown from './CustomDropdown'
 
@@ -50,7 +50,12 @@ export default function BatchProcessor() {
 
   const [exportFormat, setExportFormat] = useState('image/webp-lossless')
   const [quality, setQuality] = useState(90)
+  
+  // Resizing State
   const [resizeWidth, setResizeWidth] = useState<number | ''>('')
+  const [resizeHeight, setResizeHeight] = useState<number | ''>('')
+  const [maintainRatio, setMaintainRatio] = useState(true)
+  const [presetSize, setPresetSize] = useState('custom')
   
   const [enableBgRemoval, setEnableBgRemoval] = useState(false)
   const [bgModel, setBgModel] = useState('isnet_quint8')
@@ -69,6 +74,17 @@ export default function BatchProcessor() {
   }
   
   const clearAll = () => setFiles([])
+
+  const handlePresetChange = (val: string) => {
+    setPresetSize(val)
+    if (val !== 'custom') {
+      const [w, h] = val.split('x').map(Number)
+      setResizeWidth(w)
+      setResizeHeight(h)
+      // For fixed specific sizes like Passport/Stamp, we typically stretch/crop to exact box
+      setMaintainRatio(false) 
+    }
+  }
 
   const handleBatchProcess = async () => {
     if (files.length === 0) return
@@ -95,9 +111,29 @@ export default function BatchProcessor() {
 
         let targetWidth = img.width
         let targetHeight = img.height
-        if (resizeWidth && typeof resizeWidth === 'number') {
-          targetWidth = resizeWidth
-          targetHeight = Math.round((img.height * resizeWidth) / img.width)
+        
+        const rw = typeof resizeWidth === 'number' ? resizeWidth : null;
+        const rh = typeof resizeHeight === 'number' ? resizeHeight : null;
+
+        if (rw || rh) {
+          if (maintainRatio) {
+            if (rw && rh) {
+              // Bounding box logic: fit within rw x rh while maintaining ratio
+              const ratio = Math.min(rw / img.width, rh / img.height);
+              targetWidth = Math.max(1, Math.round(img.width * ratio));
+              targetHeight = Math.max(1, Math.round(img.height * ratio));
+            } else if (rw) {
+              targetWidth = rw;
+              targetHeight = Math.max(1, Math.round((img.height * rw) / img.width));
+            } else if (rh) {
+              targetHeight = rh;
+              targetWidth = Math.max(1, Math.round((img.width * rh) / img.height));
+            }
+          } else {
+            // Force exact dimensions (will squish/stretch if ratio doesn't match)
+            targetWidth = rw || img.width;
+            targetHeight = rh || img.height;
+          }
         }
 
         canvas.width = targetWidth
@@ -180,9 +216,63 @@ export default function BatchProcessor() {
           </div>
         )}
 
+        {/* Resizing Options */}
         <div className="space-y-3 border-t border-slate-200 pt-4 flex-shrink-0">
-          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">Resize Width (px)</label>
-          <input type="number" placeholder="e.g. 1920 (Blank for original)" value={resizeWidth} onChange={(e) => setResizeWidth(e.target.value ? Number(e.target.value) : '')} disabled={isProcessing} className="w-full p-2.5 border border-slate-200 rounded text-sm bg-white disabled:opacity-50" />
+          <label className="flex items-center gap-2 text-xs font-bold text-slate-700 uppercase tracking-wider">
+            <Maximize className="w-4 h-4 text-[#6384A3]"/> Dimension & Resizing
+          </label>
+          
+          <CustomDropdown 
+            value={presetSize} 
+            onChange={handlePresetChange} 
+            disabled={isProcessing}
+            direction="down"
+            options={[
+              { value: 'custom', label: 'Custom Freeform' },
+              { value: '600x600', label: 'US Passport (2x2 in) - 600x600' },
+              { value: '413x531', label: 'UK/EU Passport - 413x531' },
+              { value: '354x472', label: 'Stamp Size - 354x472' },
+              { value: '1920x1080', label: 'Full HD (1080p) - 1920x1080' },
+              { value: '1280x720', label: 'HD (720p) - 1280x720' },
+              { value: '1080x1080', label: 'Instagram Square - 1080x1080' },
+            ]}
+          />
+
+          <div className="grid grid-cols-2 gap-2 mt-2">
+            <div>
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">Width (px)</label>
+              <input 
+                type="number" 
+                placeholder="Auto" 
+                value={resizeWidth} 
+                onChange={(e) => { setResizeWidth(e.target.value ? Number(e.target.value) : ''); setPresetSize('custom'); }} 
+                disabled={isProcessing} 
+                className="w-full p-2 border border-slate-200 rounded text-sm bg-white disabled:opacity-50" 
+              />
+            </div>
+            <div>
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">Height (px)</label>
+              <input 
+                type="number" 
+                placeholder="Auto" 
+                value={resizeHeight} 
+                onChange={(e) => { setResizeHeight(e.target.value ? Number(e.target.value) : ''); setPresetSize('custom'); }} 
+                disabled={isProcessing} 
+                className="w-full p-2 border border-slate-200 rounded text-sm bg-white disabled:opacity-50" 
+              />
+            </div>
+          </div>
+          
+          <label className="flex items-center gap-2 mt-2 text-[11px] font-semibold text-slate-600 cursor-pointer">
+            <input 
+              type="checkbox" 
+              checked={maintainRatio} 
+              onChange={(e) => setMaintainRatio(e.target.checked)} 
+              disabled={isProcessing} 
+              className="w-3.5 h-3.5 accent-[#6384A3] rounded disabled:opacity-50 cursor-pointer" 
+            />
+            Maintain Aspect Ratio (Fit Inside)
+          </label>
         </div>
 
         {/* Batch AI Removal */}

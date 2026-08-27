@@ -1,11 +1,11 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import ReactCrop, { Crop } from 'react-image-crop'
 import 'react-image-crop/dist/ReactCrop.css'
 import { removeBackground, Config } from '@imgly/background-removal'
 import { jsPDF } from 'jspdf'
-import { Crop as CropIcon, Eraser, Download, Settings2, Image as ImageIcon, Palette, Type, X, Undo2, Sparkles, Wand2, RotateCw, FlipHorizontal, FlipVertical, Square, RefreshCcw, Blend } from 'lucide-react'
+import { Crop as CropIcon, Eraser, Download, Settings2, Image as ImageIcon, Palette, X, Undo2, Sparkles, Wand2, RotateCw, FlipHorizontal, FlipVertical, Square, RefreshCcw, Blend, Type, Maximize } from 'lucide-react'
 import CustomDropdown from './CustomDropdown'
 
 const createImage = (url: string): Promise<HTMLImageElement> =>
@@ -39,6 +39,14 @@ const optimizeImageForAI = async (imageSrc: string): Promise<string> => {
   return canvas.toDataURL('image/jpeg', 0.95) 
 }
 
+const formatBytes = (bytes: number) => {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+}
+
 interface PhotoEditorProps {
   file: File
   onCancel: () => void
@@ -51,7 +59,8 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
   const currentImage = history[history.length - 1] 
   const canUndo = history.length > 1
   
-  const [activeTool, setActiveTool] = useState<'crop' | 'bg' | 'enhance' | 'transform' | null>(null)
+  // Set default active tool to 'export' to have Format & Export expanded by default
+  const [activeTool, setActiveTool] = useState<'crop' | 'bg' | 'enhance' | 'transform' | 'resize' | 'export' | null>('export')
   
   // Base Name for Exporting
   const baseName = file.name.substring(0, file.name.lastIndexOf('.')) || file.name
@@ -60,7 +69,9 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
   const [liveTransform, setLiveTransform] = useState({ rotate: 0, flipH: false, flipV: false, radius: 0 })
 
   // Crop State
-  const [crop, setCrop] = useState<Crop>({ unit: '%', width: 100, height: 100, x: 0, y: 0 })
+  const [cropAspect, setCropAspect] = useState<number | undefined>(undefined)
+  const [crop, setCrop] = useState<Crop>({ unit: '%', width: 50, height: 50, x: 25, y: 25 })
+  const [completedCrop, setCompletedCrop] = useState<Crop | null>(null)
   const imgRef = useRef<HTMLImageElement>(null)
 
   // Background State
@@ -77,9 +88,17 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
   const defaultFilters = { b: 100, c: 100, s: 100, sep: 0 }
   const [liveFilters, setLiveFilters] = useState(defaultFilters)
 
-  // Export State
-  const [exportFormat, setExportFormat] = useState<string>('image/png')
-  const [compressionQuality, setCompressionQuality] = useState<number>(90)
+  // Export & Conversion State
+  const [exportFormat, setExportFormat] = useState<string>('image/webp')
+  const [compressionQuality, setCompressionQuality] = useState<number>(85)
+  const [resizeWidth, setResizeWidth] = useState<number | ''>('')
+  const [resizeHeight, setResizeHeight] = useState<number | ''>('')
+  const [maintainRatio, setMaintainRatio] = useState(true)
+  const [presetSize, setPresetSize] = useState('custom')
+
+  // Preview Size State
+  const [estimatedSize, setEstimatedSize] = useState<number | null>(null)
+  const [isCalculatingSize, setIsCalculatingSize] = useState(false)
 
   const pushToGlobalHistory = (newImageUrl: string) => setHistory(prev => [...prev, newImageUrl])
   const handleUndo = () => { if (canUndo) setHistory(prev => prev.slice(0, -1)) }
@@ -130,12 +149,12 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
     ctx.drawImage(img, -img.width / 2, -img.height / 2, img.width, img.height)
 
     pushToGlobalHistory(canvas.toDataURL('image/png'))
-    setActiveTool(null)
+    setActiveTool('export')
     setLiveTransform({ rotate: 0, flipH: false, flipV: false, radius: 0 })
   }
 
   const handleApplyCrop = async () => {
-    if (!imgRef.current || crop.width === 0 || crop.height === 0) return
+    if (!imgRef.current || !completedCrop || completedCrop.width === 0 || completedCrop.height === 0) return
     const image = imgRef.current
     const canvas = document.createElement('canvas')
     const ctx = canvas.getContext('2d')
@@ -144,17 +163,23 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
     const scaleX = image.naturalWidth / image.width
     const scaleY = image.naturalHeight / image.height
 
-    canvas.width = crop.width * scaleX
-    canvas.height = crop.height * scaleY
+    canvas.width = completedCrop.width * scaleX
+    canvas.height = completedCrop.height * scaleY
 
     ctx.drawImage(
       image,
-      crop.x * scaleX, crop.y * scaleY, crop.width * scaleX, crop.height * scaleY,
-      0, 0, crop.width * scaleX, crop.height * scaleY
+      completedCrop.x * scaleX, 
+      completedCrop.y * scaleY, 
+      completedCrop.width * scaleX, 
+      completedCrop.height * scaleY,
+      0, 
+      0, 
+      canvas.width, 
+      canvas.height
     )
     pushToGlobalHistory(canvas.toDataURL('image/png'))
-    setActiveTool(null)
-    setCrop({ unit: '%', width: 100, height: 100, x: 0, y: 0 })
+    setActiveTool('export')
+    setCropAspect(undefined)
   }
 
   const handleAutoEnhance = () => {
@@ -173,7 +198,7 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
     ctx.drawImage(img, 0, 0)
     
     pushToGlobalHistory(canvas.toDataURL('image/png'))
-    setActiveTool(null)
+    setActiveTool('export')
     setLiveFilters(defaultFilters)
   }
 
@@ -185,8 +210,24 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
     }
   }
 
+  const handlePresetChange = (val: string) => {
+    setPresetSize(val)
+    if (val !== 'custom') {
+      const [w, h] = val.split('x').map(Number)
+      setResizeWidth(w)
+      setResizeHeight(h)
+      setMaintainRatio(false) 
+    } else {
+      setResizeWidth('')
+      setResizeHeight('')
+    }
+  }
+
   const drawBackgroundToCanvas = async (ctx: CanvasRenderingContext2D, canvasW: number, canvasH: number) => {
-    if (bgType === 'color') {
+    if (exportFormat === 'image/jpeg' && bgType === 'transparent') {
+      ctx.fillStyle = '#FFFFFF'
+      ctx.fillRect(0, 0, canvasW, canvasH)
+    } else if (bgType === 'color') {
       ctx.fillStyle = bgColor
       ctx.fillRect(0, 0, canvasW, canvasH)
     } else if (bgType === 'gradient') {
@@ -197,7 +238,6 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
       ctx.fillRect(0, 0, canvasW, canvasH)
     } else if (bgType === 'image' && bgImage) {
       const bgImgObj = await createImage(bgImage)
-      
       const imgRatio = bgImgObj.width / bgImgObj.height
       const canvasRatio = canvasW / canvasH
       let renderWidth, renderHeight
@@ -221,45 +261,63 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
     }
   }
 
-  const handleExport = async () => {
+  const generateOutputBlob = async (): Promise<Blob | null> => {
     const img = await createImage(currentImage)
+    
+    let targetWidth = img.width
+    let targetHeight = img.height
+    
+    const rw = typeof resizeWidth === 'number' ? resizeWidth : null;
+    const rh = typeof resizeHeight === 'number' ? resizeHeight : null;
 
-    // 1. PDF Export Path
-    if (exportFormat === 'application/pdf') {
-      const pdf = new jsPDF({ orientation: img.width > img.height ? 'landscape' : 'portrait', unit: 'px', format: [img.width, img.height] })
-      
-      const tempCanvas = document.createElement('canvas')
-      tempCanvas.width = img.width
-      tempCanvas.height = img.height
-      const ctx = tempCanvas.getContext('2d')
-      if (ctx) {
-        await drawBackgroundToCanvas(ctx, img.width, img.height)
-        ctx.drawImage(img, 0, 0)
-        pdf.addImage(tempCanvas.toDataURL('image/jpeg', 1.0), 'JPEG', 0, 0, img.width, img.height)
+    if (rw || rh) {
+      if (maintainRatio) {
+        if (rw && rh) {
+          const ratio = Math.min(rw / img.width, rh / img.height);
+          targetWidth = Math.max(1, Math.round(img.width * ratio));
+          targetHeight = Math.max(1, Math.round(img.height * ratio));
+        } else if (rw) {
+          targetWidth = rw;
+          targetHeight = Math.max(1, Math.round((img.height * rw) / img.width));
+        } else if (rh) {
+          targetHeight = rh;
+          targetWidth = Math.max(1, Math.round((img.width * rh) / img.height));
+        }
+      } else {
+        targetWidth = rw || img.width;
+        targetHeight = rh || img.height;
       }
-
-      pdf.save(`${baseName}_zs_converter.pdf`)
-      onComplete(currentImage)
-      return
     }
 
-    // 2. ICO Favicon (32x32) Export Path
+    if (exportFormat === 'application/pdf') {
+      const pdf = new jsPDF({ orientation: targetWidth > targetHeight ? 'landscape' : 'portrait', unit: 'px', format: [targetWidth, targetHeight] })
+      const tempCanvas = document.createElement('canvas')
+      tempCanvas.width = targetWidth
+      tempCanvas.height = targetHeight
+      const ctx = tempCanvas.getContext('2d')
+      if (ctx) {
+        await drawBackgroundToCanvas(ctx, targetWidth, targetHeight)
+        ctx.drawImage(img, 0, 0, targetWidth, targetHeight)
+        pdf.addImage(tempCanvas.toDataURL('image/jpeg', 1.0), 'JPEG', 0, 0, targetWidth, targetHeight)
+      }
+      return pdf.output('blob')
+    }
+
     if (exportFormat === 'image/x-icon') {
       const icoCanvas = document.createElement('canvas')
       icoCanvas.width = 32
       icoCanvas.height = 32
       const icoCtx = icoCanvas.getContext('2d')
-      if (!icoCtx) return
+      if (!icoCtx) return null
 
       await drawBackgroundToCanvas(icoCtx, 32, 32)
       icoCtx.drawImage(img, 0, 0, 32, 32)
 
       const pngBlob = await new Promise<Blob | null>(resolve => icoCanvas.toBlob(resolve, 'image/png'))
-      if (!pngBlob) return
+      if (!pngBlob) return null
 
       const pngBuffer = await pngBlob.arrayBuffer()
       const pngBytes = new Uint8Array(pngBuffer)
-
       const icoBuffer = new ArrayBuffer(22 + pngBytes.length)
       const view = new DataView(icoBuffer)
 
@@ -276,36 +334,64 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
       view.setUint32(18, 22, true)
       new Uint8Array(icoBuffer, 22).set(pngBytes)
 
-      const icoBlob = new Blob([icoBuffer], { type: 'image/x-icon' })
-      const finalUrl = URL.createObjectURL(icoBlob)
-      const link = document.createElement('a')
-      link.href = finalUrl
-      link.download = `${baseName}_zs_converter.ico`
-      link.click()
-      
-      onComplete(finalUrl)
-      return
+      return new Blob([icoBuffer], { type: 'image/x-icon' })
     }
 
-    // 3. Standard Raster Image Export Path
     const canvas = document.createElement('canvas')
-    canvas.width = img.width
-    canvas.height = img.height
+    canvas.width = targetWidth
+    canvas.height = targetHeight
     const ctx = canvas.getContext('2d')
-    if (!ctx) return
+    if (!ctx) return null
 
-    await drawBackgroundToCanvas(ctx, canvas.width, canvas.height)
-    ctx.drawImage(img, 0, 0)
+    await drawBackgroundToCanvas(ctx, targetWidth, targetHeight)
+    ctx.drawImage(img, 0, 0, targetWidth, targetHeight)
 
     let mimeType = exportFormat
     let quality = compressionQuality / 100
     if (exportFormat === 'image/webp-lossless' || exportFormat === 'image/png') quality = 1.0
     if (exportFormat === 'image/webp-lossless') mimeType = 'image/webp'
 
-    const finalUrl = canvas.toDataURL(mimeType, quality)
+    return new Promise<Blob | null>(resolve => canvas.toBlob(resolve, mimeType, quality))
+  }
+
+  // Debounced output file size estimator
+  useEffect(() => {
+    let isMounted = true;
+    const calculate = async () => {
+      setIsCalculatingSize(true);
+      try {
+        const blob = await generateOutputBlob();
+        if (isMounted && blob) {
+          setEstimatedSize(blob.size);
+        }
+      } catch (e) {
+        console.error(e)
+      } finally {
+        if (isMounted) setIsCalculatingSize(false);
+      }
+    };
+
+    const timer = setTimeout(calculate, 600);
+    return () => { isMounted = false; clearTimeout(timer); }
+  }, [currentImage, exportFormat, compressionQuality, bgType, bgColor, bgGradientColor1, bgGradientColor2, bgImage, bgImageScale, resizeWidth, resizeHeight, maintainRatio])
+
+
+  const handleExport = async () => {
+    const blob = await generateOutputBlob()
+    if (!blob) {
+      alert("Failed to generate output.")
+      return
+    }
+
+    const finalUrl = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = finalUrl
-    const ext = mimeType.split('/')[1]
+    
+    let ext = exportFormat.split('/')[1]
+    if (exportFormat === 'image/webp-lossless') ext = 'webp'
+    if (exportFormat === 'application/pdf') ext = 'pdf'
+    if (exportFormat === 'image/x-icon') ext = 'ico'
+    
     link.download = `${baseName}_zs_converter.${ext}`
     link.click()
     
@@ -345,7 +431,7 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
         <div className="relative z-10 w-full h-full flex items-center justify-center p-2 overflow-hidden">
           {activeTool === 'crop' ? (
             <div className="w-full h-full flex items-center justify-center overflow-hidden">
-              <ReactCrop crop={crop} onChange={c => setCrop(c)} className="max-w-full max-h-full">
+              <ReactCrop crop={crop} onChange={c => setCrop(c)} onComplete={c => setCompletedCrop(c)} aspect={cropAspect} className="max-w-full max-h-full">
                 <img ref={imgRef} src={currentImage} alt="Crop Preview" className="w-auto h-auto max-w-full max-h-full" style={{ maxHeight: '55vh', ...previewStyle }} />
               </ReactCrop>
             </div>
@@ -356,206 +442,309 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
       </div>
 
       {/* Toolbar Sidebar */}
-      <div className="w-full lg:w-80 h-auto lg:h-full flex flex-col gap-4 overflow-y-auto p-4 lg:p-6 bg-slate-50 border-r-0 lg:border-r border-slate-200 order-2 lg:order-1">
-        <div className="flex justify-between items-center border-b border-slate-200 pb-2 flex-shrink-0">
-          <h4 className="text-xs font-bold text-slate-800 uppercase tracking-widest flex items-center gap-2"><Settings2 className="w-4 h-4" /> Tools</h4>
+      <div className="w-full lg:w-[340px] h-auto lg:h-full flex flex-col bg-slate-50 border-r-0 lg:border-r border-slate-200 order-2 lg:order-1 relative">
+        <div className="flex-1 overflow-y-auto p-4 lg:p-6 pb-4 flex flex-col gap-4 relative">
+          <div className="flex justify-between items-center border-b border-slate-200 pb-2 flex-shrink-0">
+            <h4 className="text-xs font-bold text-slate-800 uppercase tracking-widest flex items-center gap-2"><Settings2 className="w-4 h-4" /> Tools</h4>
+            <button onClick={handleUndo} disabled={!canUndo} className="flex items-center gap-1.5 px-3 py-1 bg-white border border-slate-200 rounded-full text-[10px] font-bold uppercase tracking-widest text-slate-600 hover:bg-slate-100 hover:text-[#6384A3] disabled:opacity-40 transition-colors shadow-sm">
+              <Undo2 className="w-3 h-3" /> Undo Action
+            </button>
+          </div>
           
-          <button onClick={handleUndo} disabled={!canUndo} className="flex items-center gap-1.5 px-3 py-1 bg-white border border-slate-200 rounded-full text-[10px] font-bold uppercase tracking-widest text-slate-600 hover:bg-slate-100 hover:text-[#6384A3] disabled:opacity-40 transition-colors shadow-sm">
-            <Undo2 className="w-3 h-3" /> Undo Action
-          </button>
-        </div>
-        
-        {/* Background Tool */}
-        <div className="border border-slate-200 rounded-lg overflow-hidden flex-shrink-0 bg-white">
-          <button onClick={() => setActiveTool(activeTool === 'bg' ? null : 'bg')} className="w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors">
-            <Eraser className="w-4 h-4 text-[#6384A3]" /> Background Removal
-          </button>
-          {activeTool === 'bg' && (
-            <div className="p-4 bg-white space-y-4 border-t border-slate-100">
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">1. AI Model</label>
-                <CustomDropdown 
-                  value={selectedModel} 
-                  onChange={setSelectedModel} 
-                  options={[
-                    { value: 'isnet_quint8', label: 'Light Model (Fastest)' },
-                    { value: 'isnet_fp16', label: 'Medium Model (Balanced)' },
-                    { value: 'isnet', label: 'Heavy Model (Highest Quality)' }
-                  ]}
-                />
-                <button onClick={handleRemoveBg} disabled={isRemovingBg} className="w-full py-2.5 mt-2 bg-[#6384A3] text-white text-[10px] font-bold uppercase tracking-widest rounded hover:bg-[#4f6a83] disabled:opacity-50 flex justify-center items-center gap-2">
-                  {isRemovingBg ? 'Processing...' : <><Wand2 className="w-3 h-3"/> Remove Background</>}
-                </button>
-              </div>
-              <div className="space-y-3 pt-4 border-t border-slate-100">
-                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">2. Add New Background</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button onClick={() => { setBgType('transparent'); setBgImage(null); }} className={`py-1.5 text-[10px] font-bold uppercase tracking-wider rounded border ${bgType === 'transparent' ? 'bg-slate-800 text-white border-slate-800' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}`}>None</button>
-                  <button onClick={() => setBgType('color')} className={`py-1.5 text-[10px] font-bold uppercase tracking-wider rounded border flex items-center justify-center gap-1 ${bgType === 'color' ? 'bg-[#6384A3] text-white border-[#6384A3]' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}`}><Palette className="w-3 h-3"/> Color</button>
-                  <button onClick={() => setBgType('gradient')} className={`py-1.5 text-[10px] font-bold uppercase tracking-wider rounded border flex items-center justify-center gap-1 ${bgType === 'gradient' ? 'bg-[#6384A3] text-white border-[#6384A3]' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}`}><Blend className="w-3 h-3"/> Gradient</button>
-                  <button onClick={() => document.getElementById('bg-upload')?.click()} className={`py-1.5 text-[10px] font-bold uppercase tracking-wider rounded border flex items-center justify-center gap-1 ${bgType === 'image' ? 'bg-[#6384A3] text-white border-[#6384A3]' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}`}><ImageIcon className="w-3 h-3"/> Image</button>
-                  <input type="file" id="bg-upload" accept="image/*" className="hidden" onChange={handleBgImageUpload} />
+          {/* Background Tool */}
+          <div className={`border border-slate-200 rounded-lg flex-shrink-0 bg-white shadow-sm transition-all relative ${activeTool === 'bg' ? 'z-20' : 'z-0'}`}>
+            <button onClick={() => setActiveTool(activeTool === 'bg' ? null : 'bg')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activeTool === 'bg' ? 'rounded-t-lg' : 'rounded-lg'}`}>
+              <Eraser className="w-4 h-4 text-[#6384A3]" /> Background Removal
+            </button>
+            {activeTool === 'bg' && (
+              <div className="p-4 bg-white space-y-4 border-t border-slate-100 rounded-b-lg">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">1. AI Model</label>
+                  <CustomDropdown 
+                    value={selectedModel} 
+                    onChange={setSelectedModel} 
+                    direction="down"
+                    options={[
+                      { value: 'isnet_quint8', label: 'Light Model (Fastest)' },
+                      { value: 'isnet_fp16', label: 'Medium Model (Balanced)' },
+                      { value: 'isnet', label: 'Heavy Model (Highest Quality)' }
+                    ]}
+                  />
+                  <button onClick={handleRemoveBg} disabled={isRemovingBg} className="w-full py-2.5 mt-2 bg-[#6384A3] text-white text-[10px] font-bold uppercase tracking-widest rounded hover:bg-[#4f6a83] disabled:opacity-50 flex justify-center items-center gap-2">
+                    {isRemovingBg ? 'Processing...' : <><Wand2 className="w-3 h-3"/> Remove Background</>}
+                  </button>
                 </div>
-
-                {bgType === 'color' && (
-                  <div className="flex items-center gap-3 p-2 bg-slate-50 border border-slate-200 rounded mt-2">
-                    <input type="color" value={bgColor} onChange={(e) => setBgColor(e.target.value)} className="w-10 h-8 rounded cursor-pointer p-0 border-0 bg-transparent" />
-                    <span className="font-mono text-xs font-bold text-slate-700 uppercase tracking-wider">{bgColor}</span>
+                <div className="space-y-3 pt-4 border-t border-slate-100">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">2. Add New Background</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button onClick={() => { setBgType('transparent'); setBgImage(null); }} className={`py-1.5 text-[10px] font-bold uppercase tracking-wider rounded border ${bgType === 'transparent' ? 'bg-slate-800 text-white border-slate-800' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}`}>None</button>
+                    <button onClick={() => setBgType('color')} className={`py-1.5 text-[10px] font-bold uppercase tracking-wider rounded border flex items-center justify-center gap-1 ${bgType === 'color' ? 'bg-[#6384A3] text-white border-[#6384A3]' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}`}><Palette className="w-3 h-3"/> Color</button>
+                    <button onClick={() => setBgType('gradient')} className={`py-1.5 text-[10px] font-bold uppercase tracking-wider rounded border flex items-center justify-center gap-1 ${bgType === 'gradient' ? 'bg-[#6384A3] text-white border-[#6384A3]' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}`}><Blend className="w-3 h-3"/> Gradient</button>
+                    <button onClick={() => document.getElementById('bg-upload')?.click()} className={`py-1.5 text-[10px] font-bold uppercase tracking-wider rounded border flex items-center justify-center gap-1 ${bgType === 'image' ? 'bg-[#6384A3] text-white border-[#6384A3]' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}`}><ImageIcon className="w-3 h-3"/> Image</button>
+                    <input type="file" id="bg-upload" accept="image/*" className="hidden" onChange={handleBgImageUpload} />
                   </div>
-                )}
 
-                {bgType === 'gradient' && (
-                  <div className="flex items-center justify-between gap-2 p-2 bg-slate-50 border border-slate-200 rounded mt-2">
-                    <div className="flex items-center gap-2">
-                      <input type="color" value={bgGradientColor1} onChange={(e) => setBgGradientColor1(e.target.value)} className="w-8 h-8 rounded cursor-pointer p-0 border-0 bg-transparent" />
-                      <span className="font-mono text-[10px] font-bold text-slate-700 uppercase tracking-wider">{bgGradientColor1}</span>
+                  {bgType === 'color' && (
+                    <div className="flex items-center gap-3 p-2 bg-slate-50 border border-slate-200 rounded mt-2">
+                      <input type="color" value={bgColor} onChange={(e) => setBgColor(e.target.value)} className="w-10 h-8 rounded cursor-pointer p-0 border-0 bg-transparent" />
+                      <span className="font-mono text-xs font-bold text-slate-700 uppercase tracking-wider">{bgColor}</span>
                     </div>
-                    <span className="text-slate-400 text-xs font-bold">to</span>
-                    <div className="flex items-center gap-2">
-                      <input type="color" value={bgGradientColor2} onChange={(e) => setBgGradientColor2(e.target.value)} className="w-8 h-8 rounded cursor-pointer p-0 border-0 bg-transparent" />
-                      <span className="font-mono text-[10px] font-bold text-slate-700 uppercase tracking-wider">{bgGradientColor2}</span>
+                  )}
+
+                  {bgType === 'gradient' && (
+                    <div className="flex items-center justify-between gap-2 p-2 bg-slate-50 border border-slate-200 rounded mt-2">
+                      <div className="flex items-center gap-2">
+                        <input type="color" value={bgGradientColor1} onChange={(e) => setBgGradientColor1(e.target.value)} className="w-8 h-8 rounded cursor-pointer p-0 border-0 bg-transparent" />
+                        <span className="font-mono text-[10px] font-bold text-slate-700 uppercase tracking-wider">{bgGradientColor1}</span>
+                      </div>
+                      <span className="text-slate-400 text-xs font-bold">to</span>
+                      <div className="flex items-center gap-2">
+                        <input type="color" value={bgGradientColor2} onChange={(e) => setBgGradientColor2(e.target.value)} className="w-8 h-8 rounded cursor-pointer p-0 border-0 bg-transparent" />
+                        <span className="font-mono text-[10px] font-bold text-slate-700 uppercase tracking-wider">{bgGradientColor2}</span>
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
 
-                {bgType === 'image' && bgImage && (
-                  <div className="space-y-2 bg-slate-50 border border-slate-200 rounded p-3 mt-2">
-                    <div className="flex justify-between items-center text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                      <span>Zoom BG</span>
-                      <span className="text-[#6384A3]">{bgImageScale}%</span>
+                  {bgType === 'image' && bgImage && (
+                    <div className="space-y-2 bg-slate-50 border border-slate-200 rounded p-3 mt-2">
+                      <div className="flex justify-between items-center text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                        <span>Zoom BG</span>
+                        <span className="text-[#6384A3]">{bgImageScale}%</span>
+                      </div>
+                      <input type="range" min="10" max="300" value={bgImageScale} onChange={(e) => setBgImageScale(Number(e.target.value))} className="w-full accent-[#6384A3]" />
                     </div>
-                    <input type="range" min="10" max="300" value={bgImageScale} onChange={(e) => setBgImageScale(Number(e.target.value))} className="w-full accent-[#6384A3]" />
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Transform & Shape Tool */}
-        <div className="border border-slate-200 rounded-lg overflow-hidden flex-shrink-0 bg-white">
-          <button onClick={() => setActiveTool(activeTool === 'transform' ? null : 'transform')} className="w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors">
-            <RotateCw className="w-4 h-4 text-[#6384A3]" /> Transform & Shape
-          </button>
-          {activeTool === 'transform' && (
-            <div className="p-4 bg-white border-t border-slate-100 space-y-4">
-              <div className="grid grid-cols-3 gap-2">
-                <button onClick={() => setLiveTransform(prev => ({ ...prev, rotate: (prev.rotate + 90) % 360 }))} className="py-2 bg-slate-50 border border-slate-200 rounded text-[10px] font-bold uppercase tracking-widest text-slate-600 hover:bg-slate-100 flex flex-col items-center gap-1">
-                  <RotateCw className="w-4 h-4 text-[#6384A3]" /> Rotate
-                </button>
-                <button onClick={() => setLiveTransform(prev => ({ ...prev, flipH: !prev.flipH }))} className="py-2 bg-slate-50 border border-slate-200 rounded text-[10px] font-bold uppercase tracking-widest text-slate-600 hover:bg-slate-100 flex flex-col items-center gap-1">
-                  <FlipHorizontal className="w-4 h-4 text-[#6384A3]" /> Mirror
-                </button>
-                <button onClick={() => setLiveTransform(prev => ({ ...prev, flipV: !prev.flipV }))} className="py-2 bg-slate-50 border border-slate-200 rounded text-[10px] font-bold uppercase tracking-widest text-slate-600 hover:bg-slate-100 flex flex-col items-center gap-1">
-                  <FlipVertical className="w-4 h-4 text-[#6384A3]" /> Flip
-                </button>
-              </div>
-              <div className="space-y-2 pt-2">
-                <div className="flex justify-between items-center text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                  <span className="flex items-center gap-1"><Square className="w-3 h-3" /> Corner Radius</span>
-                  <span className="text-[#6384A3]">{liveTransform.radius}%</span>
-                </div>
-                <input type="range" min="0" max="50" value={liveTransform.radius} onChange={(e) => setLiveTransform({...liveTransform, radius: Number(e.target.value)})} className="w-full accent-[#6384A3]" />
-              </div>
-              <div className="flex gap-2 pt-2 border-t border-slate-100 mt-2">
-                <button onClick={() => setLiveTransform({ rotate: 0, flipH: false, flipV: false, radius: 0 })} className="flex-[0.5] py-2 text-[10px] uppercase tracking-wider font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50 flex justify-center items-center" title="Reset">
-                  <RefreshCcw className="w-3.5 h-3.5" />
-                </button>
-                <button onClick={() => { setActiveTool(null); setLiveTransform({ rotate: 0, flipH: false, flipV: false, radius: 0 }); }} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50">Cancel</button>
-                <button onClick={handleApplyTransform} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-white bg-[#6384A3] rounded hover:bg-[#4f6a83]">Apply</button>
-              </div>
-            </div>
-          )}
-        </div>
-        
-        {/* Crop Tool */}
-        <div className="border border-slate-200 rounded-lg overflow-hidden flex-shrink-0 bg-white">
-          <button onClick={() => setActiveTool(activeTool === 'crop' ? null : 'crop')} className="w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors">
-            <CropIcon className="w-4 h-4 text-[#6384A3]" /> Freehand Crop
-          </button>
-          {activeTool === 'crop' && (
-            <div className="p-4 bg-white border-t border-slate-100 space-y-3">
-              <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-widest text-center">Drag the edges on the image preview to define your custom crop area.</p>
-              <div className="flex gap-2 pt-2 border-t border-slate-100 mt-2">
-                <button onClick={() => setActiveTool(null)} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50">Cancel</button>
-                <button onClick={handleApplyCrop} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-white bg-[#6384A3] rounded hover:bg-[#4f6a83]">Apply Crop</button>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Enhance Tool */}
-        <div className="border border-slate-200 rounded-lg overflow-hidden flex-shrink-0 bg-white">
-          <button onClick={() => setActiveTool(activeTool === 'enhance' ? null : 'enhance')} className="w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors">
-            <Sparkles className="w-4 h-4 text-[#6384A3]" /> Enhance Photo
-          </button>
-          {activeTool === 'enhance' && (
-            <div className="p-4 bg-white border-t border-slate-100 space-y-4">
-              <div className="flex justify-end">
-                <button onClick={handleAutoEnhance} className="py-1.5 px-3 bg-indigo-50 text-indigo-700 border border-indigo-100 rounded-full text-[9px] font-bold uppercase tracking-widest flex items-center gap-1 hover:bg-indigo-100 transition-colors shadow-sm">
-                  <Wand2 className="w-3 h-3" /> Auto Fix
-                </button>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Brightness</label>
-                  <input type="range" min="50" max="150" value={liveFilters.b} onChange={(e) => setLiveFilters({...liveFilters, b: Number(e.target.value)})} className="w-full accent-[#6384A3]" />
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Contrast</label>
-                  <input type="range" min="50" max="150" value={liveFilters.c} onChange={(e) => setLiveFilters({...liveFilters, c: Number(e.target.value)})} className="w-full accent-[#6384A3]" />
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Saturation</label>
-                  <input type="range" min="0" max="200" value={liveFilters.s} onChange={(e) => setLiveFilters({...liveFilters, s: Number(e.target.value)})} className="w-full accent-[#6384A3]" />
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Warmth</label>
-                  <input type="range" min="0" max="100" value={liveFilters.sep} onChange={(e) => setLiveFilters({...liveFilters, sep: Number(e.target.value)})} className="w-full accent-[#6384A3]" />
+                  )}
                 </div>
               </div>
-              <div className="flex gap-2 pt-2 border-t border-slate-100 mt-2">
-                <button onClick={() => setLiveFilters(defaultFilters)} className="flex-[0.5] py-2 text-[10px] uppercase tracking-wider font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50 flex justify-center items-center" title="Reset">
-                  <RefreshCcw className="w-3.5 h-3.5" />
-                </button>
-                <button onClick={() => { setActiveTool(null); setLiveFilters(defaultFilters); }} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50">Cancel</button>
-                <button onClick={handleApplyEnhancements} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-white bg-[#6384A3] rounded hover:bg-[#4f6a83]">Apply</button>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Inline Export & Conversion */}
-        <div className="mt-auto border border-slate-200 rounded-lg bg-white p-4 space-y-4 flex-shrink-0 shadow-sm">
-          <h4 className="text-[11px] font-bold text-slate-800 uppercase tracking-widest flex items-center gap-2"><Type className="w-3.5 h-3.5 text-[#6384A3]"/> Conversion & Export</h4>
-          <div className="space-y-2">
-             <div className="flex justify-between items-center text-xs">
-                <span className="text-slate-500 font-bold text-[10px] uppercase tracking-widest">Source: <span className="text-[#6384A3]">{sourceFormatDisplay}</span></span>
-             </div>
-             <CustomDropdown 
-                value={exportFormat} 
-                onChange={setExportFormat} 
-                direction="up"
-                options={[
-                  { value: 'image/png', label: 'PNG (Lossless)' },
-                  { value: 'image/webp-lossless', label: 'WebP (Lossless)' },
-                  { value: 'image/webp', label: 'WebP (Lossy Compression)' },
-                  { value: 'image/jpeg', label: 'JPG / JPEG (Lossy)' },
-                  { value: 'image/x-icon', label: 'ICO Favicon (32x32)' },
-                  { value: 'application/pdf', label: 'PDF Document' }
-                ]}
-             />
+            )}
           </div>
 
-          {!isLosslessFormat && (
-            <div className="space-y-2">
-              <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest">
-                <span className="text-slate-500">Compression Quality</span>
-                <span className="text-[#6384A3]">{compressionQuality}%</span>
+          {/* Transform & Shape Tool */}
+          <div className={`border border-slate-200 rounded-lg flex-shrink-0 bg-white shadow-sm transition-all relative ${activeTool === 'transform' ? 'z-20' : 'z-0'}`}>
+            <button onClick={() => setActiveTool(activeTool === 'transform' ? null : 'transform')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activeTool === 'transform' ? 'rounded-t-lg' : 'rounded-lg'}`}>
+              <RotateCw className="w-4 h-4 text-[#6384A3]" /> Transform & Shape
+            </button>
+            {activeTool === 'transform' && (
+              <div className="p-4 bg-white border-t border-slate-100 space-y-4 rounded-b-lg">
+                <div className="grid grid-cols-3 gap-2">
+                  <button onClick={() => setLiveTransform(prev => ({ ...prev, rotate: (prev.rotate + 90) % 360 }))} className="py-2 bg-slate-50 border border-slate-200 rounded text-[10px] font-bold uppercase tracking-widest text-slate-600 hover:bg-slate-100 flex flex-col items-center gap-1">
+                    <RotateCw className="w-4 h-4 text-[#6384A3]" /> Rotate
+                  </button>
+                  <button onClick={() => setLiveTransform(prev => ({ ...prev, flipH: !prev.flipH }))} className="py-2 bg-slate-50 border border-slate-200 rounded text-[10px] font-bold uppercase tracking-widest text-slate-600 hover:bg-slate-100 flex flex-col items-center gap-1">
+                    <FlipHorizontal className="w-4 h-4 text-[#6384A3]" /> Mirror
+                  </button>
+                  <button onClick={() => setLiveTransform(prev => ({ ...prev, flipV: !prev.flipV }))} className="py-2 bg-slate-50 border border-slate-200 rounded text-[10px] font-bold uppercase tracking-widest text-slate-600 hover:bg-slate-100 flex flex-col items-center gap-1">
+                    <FlipVertical className="w-4 h-4 text-[#6384A3]" /> Flip
+                  </button>
+                </div>
+                <div className="space-y-2 pt-2">
+                  <div className="flex justify-between items-center text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                    <span className="flex items-center gap-1"><Square className="w-3 h-3" /> Corner Radius</span>
+                    <span className="text-[#6384A3]">{liveTransform.radius}%</span>
+                  </div>
+                  <input type="range" min="0" max="50" value={liveTransform.radius} onChange={(e) => setLiveTransform({...liveTransform, radius: Number(e.target.value)})} className="w-full accent-[#6384A3]" />
+                </div>
+                <div className="flex gap-2 pt-2 border-t border-slate-100 mt-2">
+                  <button onClick={() => setLiveTransform({ rotate: 0, flipH: false, flipV: false, radius: 0 })} className="flex-[0.5] py-2 text-[10px] uppercase tracking-wider font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50 flex justify-center items-center" title="Reset">
+                    <RefreshCcw className="w-3.5 h-3.5" />
+                  </button>
+                  <button onClick={() => { setActiveTool('export'); setLiveTransform({ rotate: 0, flipH: false, flipV: false, radius: 0 }); }} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50">Cancel</button>
+                  <button onClick={handleApplyTransform} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-white bg-[#6384A3] rounded hover:bg-[#4f6a83]">Apply</button>
+                </div>
               </div>
-              <input type="range" value={compressionQuality} min={10} max={100} onChange={(e) => setCompressionQuality(Number(e.target.value))} className="w-full accent-[#6384A3]" />
-            </div>
-          )}
+            )}
+          </div>
+          
+          {/* Frame & Crop Tool */}
+          <div className={`border border-slate-200 rounded-lg flex-shrink-0 bg-white shadow-sm transition-all relative ${activeTool === 'crop' ? 'z-20' : 'z-0'}`}>
+            <button onClick={() => setActiveTool(activeTool === 'crop' ? null : 'crop')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activeTool === 'crop' ? 'rounded-t-lg' : 'rounded-lg'}`}>
+              <CropIcon className="w-4 h-4 text-[#6384A3]" /> Frame & Crop
+            </button>
+            {activeTool === 'crop' && (
+              <div className="p-4 bg-white border-t border-slate-100 space-y-4 rounded-b-lg">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Crop Aspect Ratio</label>
+                  <CustomDropdown 
+                    value={cropAspect ? cropAspect.toString() : 'free'}
+                    onChange={(val) => setCropAspect(val === 'free' ? undefined : Number(val))}
+                    direction="down"
+                    options={[
+                      { value: 'free', label: 'Freehand (No Aspect)' },
+                      { value: '1', label: 'Square (1:1)' },
+                      { value: (4/5).toString(), label: 'BD Passport / Stamp (4:5)' },
+                      { value: (16/9).toString(), label: 'Widescreen (16:9)' }
+                    ]}
+                  />
+                </div>
+                <div className="p-3 bg-blue-50 border border-blue-100 rounded text-xs text-blue-800 flex flex-col gap-1.5">
+                  <span className="font-bold flex items-center gap-1.5"><Maximize className="w-3.5 h-3.5"/> Framing Tip</span>
+                  <span className="opacity-90">Drag the edges of the box on the image to frame and "zoom" into your subject perfectly.</span>
+                </div>
+                <div className="flex gap-2 pt-2 border-t border-slate-100 mt-2">
+                  <button onClick={() => setActiveTool('export')} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50">Cancel</button>
+                  <button onClick={handleApplyCrop} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-white bg-[#6384A3] rounded hover:bg-[#4f6a83]">Apply Crop</button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Enhance Tool */}
+          <div className={`border border-slate-200 rounded-lg flex-shrink-0 bg-white shadow-sm transition-all relative ${activeTool === 'enhance' ? 'z-20' : 'z-0'}`}>
+            <button onClick={() => setActiveTool(activeTool === 'enhance' ? null : 'enhance')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activeTool === 'enhance' ? 'rounded-t-lg' : 'rounded-lg'}`}>
+              <Sparkles className="w-4 h-4 text-[#6384A3]" /> Enhance Photo
+            </button>
+            {activeTool === 'enhance' && (
+              <div className="p-4 bg-white border-t border-slate-100 space-y-4 rounded-b-lg">
+                <div className="flex justify-end">
+                  <button onClick={handleAutoEnhance} className="py-1.5 px-3 bg-indigo-50 text-indigo-700 border border-indigo-100 rounded-full text-[9px] font-bold uppercase tracking-widest flex items-center gap-1 hover:bg-indigo-100 transition-colors shadow-sm">
+                    <Wand2 className="w-3 h-3" /> Auto Fix
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Brightness</label>
+                    <input type="range" min="50" max="150" value={liveFilters.b} onChange={(e) => setLiveFilters({...liveFilters, b: Number(e.target.value)})} className="w-full accent-[#6384A3]" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Contrast</label>
+                    <input type="range" min="50" max="150" value={liveFilters.c} onChange={(e) => setLiveFilters({...liveFilters, c: Number(e.target.value)})} className="w-full accent-[#6384A3]" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Saturation</label>
+                    <input type="range" min="0" max="200" value={liveFilters.s} onChange={(e) => setLiveFilters({...liveFilters, s: Number(e.target.value)})} className="w-full accent-[#6384A3]" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Warmth</label>
+                    <input type="range" min="0" max="100" value={liveFilters.sep} onChange={(e) => setLiveFilters({...liveFilters, sep: Number(e.target.value)})} className="w-full accent-[#6384A3]" />
+                  </div>
+                </div>
+                <div className="flex gap-2 pt-2 border-t border-slate-100 mt-2">
+                  <button onClick={() => setLiveFilters(defaultFilters)} className="flex-[0.5] py-2 text-[10px] uppercase tracking-wider font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50 flex justify-center items-center" title="Reset">
+                    <RefreshCcw className="w-3.5 h-3.5" />
+                  </button>
+                  <button onClick={() => { setActiveTool('export'); setLiveFilters(defaultFilters); }} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50">Cancel</button>
+                  <button onClick={handleApplyEnhancements} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-white bg-[#6384A3] rounded hover:bg-[#4f6a83]">Apply</button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Resize Output Dimensions Accordion */}
+          <div className={`border border-slate-200 rounded-lg flex-shrink-0 bg-white shadow-sm transition-all relative ${activeTool === 'resize' ? 'z-20' : 'z-0'}`}>
+            <button onClick={() => setActiveTool(activeTool === 'resize' ? null : 'resize')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activeTool === 'resize' ? 'rounded-t-lg' : 'rounded-lg'}`}>
+              <Maximize className="w-4 h-4 text-[#6384A3]" /> Resize Dimensions
+            </button>
+            {activeTool === 'resize' && (
+              <div className="p-4 bg-white border-t border-slate-100 space-y-4 rounded-b-lg">
+                <div className="space-y-3">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Output Dimensions</label>
+                  <CustomDropdown 
+                    value={presetSize} 
+                    onChange={handlePresetChange} 
+                    direction="up"
+                    options={[
+                      { value: 'custom', label: 'Original / Custom Size' },
+                      { value: '472x591', label: 'BD Passport (472x591 px)' },
+                      { value: '236x295', label: 'BD Stamp Size (236x295 px)' },
+                      { value: '1920x1080', label: 'Full HD (1920x1080 px)' },
+                      { value: '1080x1080', label: 'Instagram Square (1080x1080 px)' },
+                    ]}
+                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Width (px)</label>
+                      <input 
+                        type="number" 
+                        placeholder="Auto" 
+                        value={resizeWidth} 
+                        onChange={(e) => { setResizeWidth(e.target.value ? Number(e.target.value) : ''); setPresetSize('custom'); }} 
+                        className="w-full p-2 border border-slate-200 rounded text-sm bg-white" 
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Height (px)</label>
+                      <input 
+                        type="number" 
+                        placeholder="Auto" 
+                        value={resizeHeight} 
+                        onChange={(e) => { setResizeHeight(e.target.value ? Number(e.target.value) : ''); setPresetSize('custom'); }} 
+                        className="w-full p-2 border border-slate-200 rounded text-sm bg-white" 
+                      />
+                    </div>
+                  </div>
+                  <label className="flex items-center gap-2 mt-2 text-[10px] font-bold text-slate-600 cursor-pointer uppercase tracking-widest">
+                    <input 
+                      type="checkbox" 
+                      checked={maintainRatio} 
+                      onChange={(e) => setMaintainRatio(e.target.checked)} 
+                      className="w-3.5 h-3.5 accent-[#6384A3] rounded cursor-pointer" 
+                    />
+                    Maintain Ratio (Fit Inside)
+                  </label>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Export Settings Accordion */}
+          <div className={`border border-slate-200 rounded-lg flex-shrink-0 bg-white shadow-sm mb-4 transition-all relative ${activeTool === 'export' ? 'z-20' : 'z-0'}`}>
+            <button onClick={() => setActiveTool(activeTool === 'export' ? null : 'export')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activeTool === 'export' ? 'rounded-t-lg' : 'rounded-lg'}`}>
+              <Type className="w-4 h-4 text-[#6384A3]" /> Format & Export
+            </button>
+            {activeTool === 'export' && (
+              <div className="p-4 bg-white border-t border-slate-100 space-y-4 rounded-b-lg">
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="text-slate-500 font-bold text-[10px] uppercase tracking-widest">Source Format: <span className="text-[#6384A3]">{sourceFormatDisplay}</span></span>
+                  </div>
+                  <CustomDropdown 
+                    value={exportFormat} 
+                    onChange={setExportFormat} 
+                    direction="up"
+                    options={[
+                      { value: 'image/png', label: 'PNG (Lossless, Largest)' },
+                      { value: 'image/webp', label: 'WebP (Optimized, Transparent)' },
+                      { value: 'image/webp-lossless', label: 'WebP (Strictly Lossless)' },
+                      { value: 'image/jpeg', label: 'JPG / JPEG (No Transparency)' },
+                      { value: 'image/x-icon', label: 'ICO Favicon (32x32)' },
+                      { value: 'application/pdf', label: 'PDF Document' }
+                    ]}
+                  />
+                </div>
+
+                {!isLosslessFormat && (
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest">
+                      <span className="text-slate-500">Output Quality</span>
+                      <span className="text-[#6384A3]">{compressionQuality}%</span>
+                    </div>
+                    <input type="range" value={compressionQuality} min={10} max={100} onChange={(e) => setCompressionQuality(Number(e.target.value))} className="w-full accent-[#6384A3]" />
+                  </div>
+                )}
+
+                <div className="bg-slate-100 rounded border border-slate-200 p-3 space-y-1.5 shadow-inner">
+                  <div className="flex justify-between text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                    <span>Original Size</span>
+                    <span>{formatBytes(file.size)}</span>
+                  </div>
+                  <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest">
+                    <span className="text-slate-700">Output Estimate</span>
+                    {isCalculatingSize ? (
+                      <span className="text-slate-400 animate-pulse">Calculating...</span>
+                    ) : (
+                      <span className={estimatedSize && estimatedSize < file.size ? 'text-green-600' : 'text-orange-600'}>
+                        {estimatedSize ? formatBytes(estimatedSize) : 'Unknown'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Global Save Action */}
+        <div className="p-4 lg:p-6 border-t border-slate-200 bg-slate-50 flex-shrink-0 z-10">
           <button onClick={handleExport} className="w-full py-3 px-4 bg-slate-900 text-white rounded-lg hover:bg-black text-center transition-colors font-bold text-xs uppercase tracking-widest shadow-md flex items-center justify-center gap-2">
             <Download className="w-4 h-4" /> Convert & Save
           </button>
