@@ -1,13 +1,16 @@
 'use client'
 
 import { useState } from 'react'
-import FileUploader from '@/components/FileUploader'
-import PhotoEditor from '@/components/PhotoEditor'
-import PdfEditor from '@/components/PdfEditor'
-import BatchProcessor from '@/components/BatchProcessor'
-import AiConverter from '@/components/AiConverter'
-import QrGenerator from '@/components/QrGenerator'
-import PaletteExtractor from '@/components/PaletteExtractor'
+import dynamic from 'next/dynamic'
+
+// Dynamically import heavy, browser-only components to completely bypass SSR build crashes
+const FileUploader = dynamic(() => import('@/components/FileUploader'), { ssr: false })
+const PhotoEditor = dynamic(() => import('@/components/PhotoEditor'), { ssr: false })
+const PdfEditor = dynamic(() => import('@/components/PdfEditor'), { ssr: false })
+const BatchProcessor = dynamic(() => import('@/components/BatchProcessor'), { ssr: false })
+const AiConverter = dynamic(() => import('@/components/AiConverter'), { ssr: false })
+const QrGenerator = dynamic(() => import('@/components/QrGenerator'), { ssr: false })
+const PaletteExtractor = dynamic(() => import('@/components/PaletteExtractor'), { ssr: false })
 
 export default function Home() {
   const [appMode, setAppMode] = useState<'image' | 'pdf' | 'batch' | 'ai' | 'qr' | 'palette'>('image')
@@ -32,9 +35,9 @@ export default function Home() {
       <div className="max-w-6xl mx-auto space-y-8">
         <header className="text-center space-y-6">
           <div>
-            <h1 className="text-3xl font-light tracking-wider text-slate-600">ZS CONVERTER</h1>
+            <h1 className="text-3xl font-extrabold tracking-tight text-slate-900">ZS Converter</h1>
             <p className="text-sm text-slate-500 max-w-lg mx-auto mt-2">
-              A fast, private, browser-based media toolkit. Developed by Zulkarnain Saurav (+8801615201545).
+              A fast, private, browser-based media toolkit. Process your files locally with zero quality loss.
             </p>
           </div>
 
