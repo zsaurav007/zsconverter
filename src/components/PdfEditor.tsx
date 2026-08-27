@@ -8,7 +8,7 @@ import { removeBackground, Config } from '@imgly/background-removal'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, useSortable, rectSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Settings2, Trash2, Eye, Download, RotateCw, Lock, Unlock, FileText, Type, SlidersHorizontal, X, FileImage, ShieldCheck, Layers, Scissors, Wand2, Hash, Edit3, PenTool, Image as ImageIcon, Sparkles, Move, ChevronLeft, ChevronRight, LayoutGrid } from 'lucide-react'
+import { Settings2, Trash2, Eye, Download, RotateCw, Lock, Unlock, FileText, Type, SlidersHorizontal, X, FileImage, ShieldCheck, Layers, Scissors, Wand2, Hash, Edit3, PenTool, Image as ImageIcon, Sparkles, Move, ChevronLeft, ChevronRight, LayoutGrid, Maximize2, ZoomIn, ZoomOut } from 'lucide-react'
 import CustomDropdown from './CustomDropdown'
 
 // --- HELPER FUNCTION ---
@@ -149,6 +149,7 @@ export default function PdfEditor() {
   
   const [previewPageIndex, setPreviewPageIndex] = useState(0)
   const [showViewerGrid, setShowViewerGrid] = useState(false) // Toggle for page navigator grid
+  const [viewerZoom, setViewerZoom] = useState(1) // Shared zoom state for the placement viewers
 
   const rightSideSigRef = useRef<HTMLDivElement>(null)
   const modalSigRef = useRef<HTMLDivElement>(null)
@@ -325,6 +326,7 @@ export default function PdfEditor() {
     setPages([])
     setOriginalDocName('document')
     setPreviewPageIndex(0)
+    setViewerZoom(1)
     setSignature(s => ({ ...s, placements: {} }))
   }
 
@@ -417,9 +419,13 @@ export default function PdfEditor() {
     }
   }
 
-  // Helper rendering to reuse the overlay in both Side-by-Side and Modal views
+  // Overlay for signatures - accurately scales width/height by container zoom
   const renderSignatureOverlay = (ctx: 'right' | 'modal') => {
     const placement = getSigPlacement(previewPageIndex)
+    const isModal = ctx === 'modal';
+    const baseVh = isModal ? 85 : 50;
+    const fontVh = baseVh * 0.07; // Approx scale to match 10% page width on PDF export
+
     return (
       <div 
         className="absolute transition-opacity duration-75 z-20"
@@ -428,18 +434,26 @@ export default function PdfEditor() {
           top: `${placement.y}%`,
           transform: 'translate(-50%, -50%)',
           opacity: placement.opacity / 100,
-          pointerEvents: 'none' // Allows clicking through the main container to start drag
+          pointerEvents: 'none',
+          width: signature.mode === 'image' ? `${(placement.scale / 50) * 30}%` : 'auto'
         }}
       >
-        <div className="relative pointer-events-auto group">
+        <div className="relative pointer-events-auto group flex items-center justify-center w-full h-full">
           {signature.mode === 'text' ? (
-            <span style={{ fontFamily: signature.font, color: signature.color, fontSize: `${(placement.scale / 100) * 3}rem`, whiteSpace: 'nowrap', display: 'block', padding: '4px' }}>
+            <span style={{ 
+              fontFamily: signature.font, 
+              color: signature.color, 
+              fontSize: `${(placement.scale / 100) * fontVh * viewerZoom}vh`, 
+              whiteSpace: 'nowrap', 
+              display: 'block', 
+              padding: '4px' 
+            }}>
               {signature.text || ' '}
             </span>
           ) : signature.imageUrl ? (
-            <img src={signature.imageUrl} alt="Sig" style={{ width: `${placement.scale * 3}px` }} className="mix-blend-multiply block pointer-events-none" />
+            <img src={signature.imageUrl} alt="Sig" className="w-full mix-blend-multiply block pointer-events-none min-w-[30px]" />
           ) : (
-            <div style={{ width: `${placement.scale * 3}px`, height: '40px' }} /> // Empty placeholder
+            <div style={{ width: '100%', height: '40px' }} />
           )}
           
           {/* Border box when interacting or hovering */}
@@ -587,7 +601,7 @@ export default function PdfEditor() {
 
           {context === 'sidebar' && (
             <button onClick={() => setShowSigModal(true)} disabled={pages.length === 0 || (signature.mode === 'image' && !signature.imageUrl)} className="w-full py-2.5 bg-slate-800 text-white font-bold text-[10px] uppercase tracking-widest rounded-lg hover:bg-black transition-colors shadow-sm flex items-center justify-center gap-2">
-              <Move className="w-3.5 h-3.5" /> Open Full Screen
+              <Maximize2 className="w-3.5 h-3.5" /> Open Full Screen
             </button>
           )}
         </div>
@@ -1124,45 +1138,64 @@ export default function PdfEditor() {
               <h3 className="text-sm font-bold text-slate-700">Drag & drop PDFs or Images here</h3>
               <p className="text-xs text-slate-500 mt-1">Pro Tip: Drop multiple files to merge them</p>
             </div>
-          ) : activePanel === 'signature' && pages.length > 0 && sigPageTarget ? (
+          ) : activePanel === 'signature' && signature.enabled && pages.length > 0 && sigPageTarget ? (
             // Live Signature Preview & Positioning (Right Side)
-            <div className="flex-1 flex flex-col h-full bg-slate-100 rounded-xl border border-slate-200 overflow-hidden relative select-none animate-in fade-in">
-              <div className="absolute top-3 left-3 z-10 bg-white/90 px-3 py-1.5 rounded shadow-sm text-[10px] font-bold text-slate-600 uppercase tracking-widest flex items-center gap-2 border border-slate-200 pointer-events-none">
+            <div className="flex-1 flex flex-col bg-slate-100 rounded-xl border border-slate-200 relative select-none animate-in fade-in h-full min-h-[400px] overflow-hidden">
+              <div className="absolute top-3 left-3 z-30 bg-white/90 px-3 py-1.5 rounded shadow-sm text-[10px] font-bold text-slate-600 uppercase tracking-widest flex items-center gap-2 border border-slate-200 pointer-events-none">
                 <Move className="w-3.5 h-3.5" /> {signature.enabled ? "Drag or Resize Signature" : "Document Preview"}
               </div>
               
+              <div className="absolute top-3 right-3 z-30 flex items-center gap-1 bg-white/90 p-1 rounded shadow-sm border border-slate-200">
+                <button onClick={() => setViewerZoom(z => Math.max(z - 0.25, 0.25))} className="p-1 hover:bg-slate-200 rounded text-slate-600">
+                  <ZoomOut className="w-4 h-4" />
+                </button>
+                <span className="text-[10px] font-bold text-slate-600 px-1">{Math.round(viewerZoom * 100)}%</span>
+                <button onClick={() => setViewerZoom(z => Math.min(z + 0.25, 5))} className="p-1 hover:bg-slate-200 rounded text-slate-600">
+                  <ZoomIn className="w-4 h-4" />
+                </button>
+                <div className="w-px h-4 bg-slate-300 mx-1" />
+                <button onClick={() => setShowSigModal(true)} className="p-1 hover:bg-slate-200 rounded text-slate-600" title="Full Screen">
+                  <Maximize2 className="w-4 h-4" />
+                </button>
+              </div>
+
               {renderPaginationOverlay()}
 
-              <div className="flex-1 flex items-center justify-center p-4 overflow-hidden relative touch-none">
+              <div className="flex-1 overflow-auto w-full h-full z-10 custom-scrollbar">
                 {showViewerGrid ? (
-                  <div className="absolute inset-0 z-40 bg-slate-100 overflow-y-auto p-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 animate-in fade-in">
-                    {pages.map((p, idx) => (
-                      <div key={p.id} onClick={() => { setPreviewPageIndex(idx); setShowViewerGrid(false); }} className={`cursor-pointer border-2 rounded-lg overflow-hidden aspect-[3/4] relative transition-colors ${previewPageIndex === idx ? 'border-[#6384A3] ring-2 ring-[#6384A3]/30' : 'border-transparent hover:border-slate-300'}`}>
-                        <img src={p.url} alt={`Thumb ${idx+1}`} className="w-full h-full object-contain bg-white" style={{ transform: `rotate(${p.rotation + p.fineRotation}deg)` }} />
-                        <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded">Page {idx + 1}</div>
-                        {signature.enabled && shouldApplySignature(idx, signature.applyMode, signature.customPages) && (
-                          <div className="absolute top-1 right-1 bg-[#6384A3] text-white text-[9px] px-1.5 py-0.5 rounded shadow">Signed</div>
-                        )}
-                      </div>
-                    ))}
+                  <div className="flex items-center justify-center p-4">
+                    <div className="w-full max-w-2xl grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 animate-in fade-in">
+                      {pages.map((p, idx) => (
+                        <div key={p.id} onClick={() => { setPreviewPageIndex(idx); setShowViewerGrid(false); }} className={`cursor-pointer border-2 rounded-lg overflow-hidden aspect-[3/4] relative transition-colors bg-white shadow-sm ${previewPageIndex === idx ? 'border-[#6384A3] ring-2 ring-[#6384A3]/30' : 'border-transparent hover:border-slate-300'}`}>
+                          <img src={p.url} alt={`Thumb ${idx+1}`} className="w-full h-full object-contain" style={{ transform: `rotate(${p.rotation + p.fineRotation}deg)` }} />
+                          <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded">Page {idx + 1}</div>
+                          {signature.enabled && shouldApplySignature(idx, signature.applyMode, signature.customPages) && (
+                            <div className="absolute top-1 right-1 bg-[#6384A3] text-white text-[9px] px-1.5 py-0.5 rounded shadow">Signed</div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 ) : (
-                  <div
-                    ref={rightSideSigRef}
-                    className="relative shadow-lg bg-white touch-none"
-                    onPointerDown={() => handlePointerDownSig('right')}
-                    onPointerMove={handlePointerMoveSig}
-                    onPointerUp={handlePointerUpSig}
-                    onPointerLeave={handlePointerUpSig}
-                  >
-                    <img
-                      src={sigPageTarget.url}
-                      className="max-h-[65vh] object-contain pointer-events-none"
-                      style={{ transform: `rotate(${sigPageTarget.rotation + sigPageTarget.fineRotation}deg) scale(${sigPageTarget.scale || 1})` }}
-                      alt="Placement Target"
-                      draggable={false}
-                    />
-                    {signature.enabled && appliesToCurrent && renderSignatureOverlay('right')}
+                  <div className="flex items-center justify-center min-h-full min-w-full w-max h-max p-4 lg:p-8">
+                    <div
+                      ref={rightSideSigRef}
+                      className="relative shadow-lg bg-white touch-none flex-shrink-0"
+                      style={{ height: `${50 * viewerZoom}vh` }}
+                      onPointerDown={() => handlePointerDownSig('right')}
+                      onPointerMove={handlePointerMoveSig}
+                      onPointerUp={handlePointerUpSig}
+                      onPointerLeave={handlePointerUpSig}
+                    >
+                      <img
+                        src={sigPageTarget.url}
+                        className="h-full w-auto block pointer-events-none object-contain"
+                        style={{ transform: `rotate(${sigPageTarget.rotation + sigPageTarget.fineRotation}deg) scale(${sigPageTarget.scale || 1})` }}
+                        alt="Placement Target"
+                        draggable={false}
+                      />
+                      {signature.enabled && appliesToCurrent && renderSignatureOverlay('right')}
+                    </div>
                   </div>
                 )}
               </div>
@@ -1217,7 +1250,7 @@ export default function PdfEditor() {
         <div className="fixed inset-0 z-[160] bg-slate-900/95 flex flex-col md:flex-row animate-in fade-in duration-200">
           
           {/* Settings Sidebar for Modal */}
-          <div className="w-full md:w-80 bg-white md:h-full flex flex-col border-b md:border-b-0 md:border-r border-slate-200 overflow-y-auto shrink-0">
+          <div className="w-full md:w-80 bg-white md:h-full flex flex-col border-b md:border-b-0 md:border-r border-slate-200 overflow-y-auto shrink-0 z-40">
             <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50 sticky top-0 z-10">
               <h3 className="text-xs font-bold text-slate-800 uppercase tracking-widest flex items-center gap-2">
                 <PenTool className="w-4 h-4 text-[#6384A3]" /> Signature Studio
@@ -1235,42 +1268,59 @@ export default function PdfEditor() {
           </div>
           
           {/* Draggable Viewport in Modal */}
-          <div className="flex-1 overflow-hidden p-4 flex items-center justify-center relative touch-none select-none">
+          <div className="flex-1 relative touch-none select-none bg-slate-900 overflow-hidden flex flex-col">
              
+             <div className="absolute top-4 right-4 z-30 flex items-center gap-1 bg-slate-800/90 p-1 rounded shadow-sm border border-slate-700">
+                <button onClick={() => setViewerZoom(z => Math.max(z - 0.25, 0.25))} className="p-1 hover:bg-slate-700 rounded text-slate-300">
+                  <ZoomOut className="w-4 h-4" />
+                </button>
+                <span className="text-[10px] font-bold text-slate-300 px-1">{Math.round(viewerZoom * 100)}%</span>
+                <button onClick={() => setViewerZoom(z => Math.min(z + 0.25, 5))} className="p-1 hover:bg-slate-700 rounded text-slate-300">
+                  <ZoomIn className="w-4 h-4" />
+                </button>
+             </div>
+
              {renderPaginationOverlay()}
 
-             {showViewerGrid ? (
-               <div className="absolute inset-0 z-40 bg-slate-900/95 overflow-y-auto p-4 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 animate-in fade-in">
-                 {pages.map((p, idx) => (
-                   <div key={p.id} onClick={() => { setPreviewPageIndex(idx); setShowViewerGrid(false); }} className={`cursor-pointer border-2 rounded-lg overflow-hidden aspect-[3/4] relative transition-colors ${previewPageIndex === idx ? 'border-blue-400 ring-2 ring-blue-400' : 'border-transparent hover:border-slate-500'}`}>
-                     <img src={p.url} alt={`Thumb ${idx+1}`} className="w-full h-full object-contain bg-slate-800" style={{ transform: `rotate(${p.rotation + p.fineRotation}deg)` }} />
-                     <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded">Page {idx + 1}</div>
-                     {signature.enabled && shouldApplySignature(idx, signature.applyMode, signature.customPages) && (
-                       <div className="absolute top-1 right-1 bg-blue-500 text-white text-[9px] px-1.5 py-0.5 rounded shadow">Signed</div>
-                     )}
+             <div className="flex-1 overflow-auto w-full h-full z-10 custom-scrollbar">
+               {showViewerGrid ? (
+                 <div className="flex items-center justify-center p-8">
+                   <div className="w-full max-w-4xl grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6 animate-in fade-in">
+                     {pages.map((p, idx) => (
+                       <div key={p.id} onClick={() => { setPreviewPageIndex(idx); setShowViewerGrid(false); }} className={`cursor-pointer border-2 rounded-lg overflow-hidden aspect-[3/4] relative transition-colors bg-white shadow-xl ${previewPageIndex === idx ? 'border-blue-400 ring-2 ring-blue-400' : 'border-transparent hover:border-slate-500'}`}>
+                         <img src={p.url} alt={`Thumb ${idx+1}`} className="w-full h-full object-contain" style={{ transform: `rotate(${p.rotation + p.fineRotation}deg)` }} />
+                         <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded">Page {idx + 1}</div>
+                         {signature.enabled && shouldApplySignature(idx, signature.applyMode, signature.customPages) && (
+                           <div className="absolute top-1 right-1 bg-blue-500 text-white text-[9px] px-1.5 py-0.5 rounded shadow">Signed</div>
+                         )}
+                       </div>
+                     ))}
                    </div>
-                 ))}
-               </div>
-             ) : (
-               <div 
-                 ref={modalSigRef}
-                 className="relative shadow-2xl bg-white select-none touch-none"
-                 onPointerDown={() => handlePointerDownSig('modal')}
-                 onPointerMove={handlePointerMoveSig}
-                 onPointerUp={handlePointerUpSig}
-                 onPointerLeave={handlePointerUpSig}
-               >
-                 <img 
-                   src={sigPageTarget.url} 
-                   className="max-h-[85vh] object-contain pointer-events-none" 
-                   style={{ transform: `rotate(${sigPageTarget.rotation + sigPageTarget.fineRotation}deg) scale(${sigPageTarget.scale || 1})` }}
-                   alt="Placement Target" 
-                   draggable={false}
-                 />
-                 
-                 {signature.enabled && appliesToCurrent && renderSignatureOverlay('modal')}
-               </div>
-             )}
+                 </div>
+               ) : (
+                 <div className="flex items-center justify-center min-h-full min-w-full w-max h-max p-8">
+                   <div 
+                     ref={modalSigRef}
+                     className="relative shadow-2xl bg-white touch-none flex-shrink-0"
+                     style={{ height: `${85 * viewerZoom}vh` }}
+                     onPointerDown={() => handlePointerDownSig('modal')}
+                     onPointerMove={handlePointerMoveSig}
+                     onPointerUp={handlePointerUpSig}
+                     onPointerLeave={handlePointerUpSig}
+                   >
+                     <img 
+                       src={sigPageTarget.url} 
+                       className="h-full w-auto block pointer-events-none object-contain" 
+                       style={{ transform: `rotate(${sigPageTarget.rotation + sigPageTarget.fineRotation}deg) scale(${sigPageTarget.scale || 1})` }}
+                       alt="Placement Target" 
+                       draggable={false}
+                     />
+                     
+                     {appliesToCurrent && renderSignatureOverlay('modal')}
+                   </div>
+                 </div>
+               )}
+             </div>
           </div>
         </div>
       )}
