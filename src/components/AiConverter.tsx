@@ -101,13 +101,13 @@ export default function AiConverter() {
       } 
       else if (exportFormat === 'psd') {
         const buffer = writePsdBuffer({ width: canvas.width, height: canvas.height, children: [{ name: 'AI Layer', canvas }] })
-        // Wrap the buffer in Uint8Array to satisfy browser BlobPart requirements
         downloadUrl = URL.createObjectURL(new Blob([new Uint8Array(buffer as any)], { type: 'application/octet-stream' }))
       } 
       else if (exportFormat === 'tiff') {
-        const rgba = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data
+        const imageData = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height)
+        // Zero-copy conversion from Uint8ClampedArray to Uint8Array for UTIF
+        const rgba = new Uint8Array(imageData.data.buffer)
         const tiffBuffer = UTIF.encodeImage(rgba, canvas.width, canvas.height)
-        // Wrap the UTIF buffer in Uint8Array for safety
         downloadUrl = URL.createObjectURL(new Blob([new Uint8Array(tiffBuffer as any)], { type: 'image/tiff' }))
       } 
       else if (exportFormat === 'eps') {
