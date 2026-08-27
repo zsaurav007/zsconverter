@@ -7,7 +7,7 @@ import JSZip from 'jszip'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, useSortable, rectSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Settings2, Trash2, Eye, Download, RotateCw, Lock, Unlock, FileText, Type, SlidersHorizontal, X, FileImage, ShieldCheck } from 'lucide-react'
+import { Settings2, Trash2, Eye, Download, RotateCw, Lock, Unlock, FileText, Type, SlidersHorizontal, X, FileImage, ShieldCheck, Layers } from 'lucide-react'
 import CustomDropdown from './CustomDropdown'
 
 // --- SORTABLE GRID ITEM ---
@@ -84,7 +84,8 @@ export default function PdfEditor() {
   // File Naming State
   const [originalDocName, setOriginalDocName] = useState('document')
 
-  const [activePanel, setActivePanel] = useState<'security' | 'watermark' | 'compression' | null>(null)
+  // Expanded Accordion State to include Merge
+  const [activePanel, setActivePanel] = useState<'security' | 'watermark' | 'compression' | 'merge' | null>(null)
 
   const [unlockPassword, setUnlockPassword] = useState('')
   const [encryptPassword, setEncryptPassword] = useState('')
@@ -127,7 +128,7 @@ export default function PdfEditor() {
 
       for (const file of acceptedFiles) {
         if (file.type === 'application/pdf') {
-          setLoadingText('Extracting PDF pages...')
+          setLoadingText(`Extracting ${file.name}...`)
           const arrayBuffer = await file.arrayBuffer()
           const pdfjsLib = await import('pdfjs-dist')
           
@@ -136,7 +137,7 @@ export default function PdfEditor() {
             pdf = await pdfjsLib.getDocument({ data: arrayBuffer, password: unlockPassword }).promise
           } catch (e: any) {
             if (e.name === 'PasswordException') {
-              alert("This PDF is password protected. Please enter the password in the 'Unlock' field and try again.")
+              alert(`The file ${file.name} is password protected. Enter the password in the 'Security' tab and try again.`)
               continue
             }
             throw e
@@ -162,7 +163,7 @@ export default function PdfEditor() {
             })
           }
         } else if (file.type.startsWith('image/')) {
-          setLoadingText('Adding images...')
+          setLoadingText('Adding image...')
           newPages.push({
             id: `image-${file.name}-${Date.now()}`,
             url: URL.createObjectURL(file),
@@ -359,6 +360,37 @@ export default function PdfEditor() {
 
           <div className="space-y-3 flex-1 overflow-y-auto pr-1">
             
+            {/* Merge Accordion */}
+            <div className="border border-slate-200 rounded-lg overflow-hidden flex-shrink-0 bg-white shadow-sm">
+              <button onClick={() => setActivePanel(activePanel === 'merge' ? null : 'merge')} className="w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors">
+                <Layers className="w-4 h-4 text-[#6384A3]" /> Merge Documents
+              </button>
+              {activePanel === 'merge' && (
+                <div className="p-4 space-y-4 border-t border-slate-100">
+                  <p className="text-xs text-slate-500">Upload multiple PDFs or images to seamlessly append them to your current document.</p>
+                  <button 
+                    onClick={() => document.getElementById('merge-file-upload')?.click()} 
+                    className="w-full py-2.5 bg-white border-2 border-dashed border-slate-300 text-slate-600 hover:border-[#6384A3] hover:text-[#6384A3] font-bold text-xs uppercase tracking-widest rounded-lg transition-colors flex items-center justify-center gap-2"
+                  >
+                    + Add Files to Merge
+                  </button>
+                  <input 
+                    type="file" 
+                    id="merge-file-upload" 
+                    multiple 
+                    accept=".pdf,image/jpeg,image/png,image/webp" 
+                    className="hidden" 
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files.length > 0) {
+                        onDrop(Array.from(e.target.files));
+                        e.target.value = ''; // Reset input so same file can be selected again
+                      }
+                    }} 
+                  />
+                </div>
+              )}
+            </div>
+
             {/* Security Accordion */}
             <div className="border border-slate-200 rounded-lg overflow-hidden flex-shrink-0 bg-white shadow-sm">
               <button onClick={() => setActivePanel(activePanel === 'security' ? null : 'security')} className="w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors">
@@ -479,8 +511,8 @@ export default function PdfEditor() {
             <div {...getRootProps()} className={`flex-1 flex flex-col items-center justify-center border-2 border-dashed rounded-xl cursor-pointer transition-colors p-6 text-center ${isDragActive ? 'border-[#6384A3] bg-blue-50/50' : 'border-slate-200 hover:border-[#6384A3] hover:bg-slate-50'}`}>
               <input {...getInputProps()} />
               <FileText className="w-10 h-10 lg:w-12 lg:h-12 mb-4 text-slate-300" />
-              <p className="text-sm font-bold text-slate-700">Drag & drop PDFs or Images here</p>
-              <p className="text-xs text-slate-500 mt-1">or tap to browse</p>
+              <h3 className="text-sm font-bold text-slate-700">Drag & drop PDFs or Images here</h3>
+              <p className="text-xs text-slate-500 mt-1">Pro Tip: Drop multiple files to merge them</p>
             </div>
           ) : (
             <div className="flex-1 overflow-y-auto pr-2">
@@ -500,9 +532,10 @@ export default function PdfEditor() {
                     ))}
                     
                     {/* Add More Dropzone Inline */}
-                    <div {...getRootProps()} className={`aspect-[3/4] border-2 border-dashed rounded-lg flex flex-col items-center justify-center cursor-pointer transition-colors ${isDragActive ? 'border-[#6384A3] bg-blue-50' : 'border-slate-200 hover:border-[#6384A3] hover:bg-slate-50'}`}>
+                    <div {...getRootProps()} className={`aspect-[3/4] border-2 border-dashed rounded-lg flex flex-col items-center justify-center cursor-pointer transition-colors p-2 text-center ${isDragActive ? 'border-[#6384A3] bg-blue-50' : 'border-slate-200 hover:border-[#6384A3] hover:bg-slate-50'}`}>
                       <input {...getInputProps()} />
-                      <span className="text-2xl text-slate-400 font-light">+</span>
+                      <span className="text-2xl text-slate-400 font-light mb-1">+</span>
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Merge PDF</span>
                     </div>
                   </div>
                 </SortableContext>
