@@ -3,7 +3,6 @@
 import { useState, useCallback, useEffect } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { jsPDF } from 'jspdf'
-import * as pdfjsLib from 'pdfjs-dist'
 import JSZip from 'jszip'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, useSortable, rectSortingStrategy } from '@dnd-kit/sortable'
@@ -29,7 +28,6 @@ function SortablePageItem({ id, url, index, rotation, onRemove, onRotate }: Sort
     transition,
   }
 
-  // Scale down rotated items slightly in the UI so they don't overflow the 3/4 aspect ratio box
   const isRotated = rotation % 180 !== 0
   const imageScale = isRotated ? 0.75 : 1
 
@@ -50,7 +48,6 @@ function SortablePageItem({ id, url, index, rotation, onRemove, onRotate }: Sort
         />
       </div>
       
-      {/* Action Buttons Overlay */}
       <div className="absolute top-2 right-2 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
         <button 
           onPointerDown={(e) => { e.stopPropagation(); onRemove(id) }}
@@ -84,19 +81,15 @@ export default function PdfEditor() {
   const [loadingText, setLoadingText] = useState('')
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
 
-  // Accordion State
   const [activePanel, setActivePanel] = useState<'security' | 'watermark' | 'compression' | null>(null)
 
-  // Document Settings
   const [unlockPassword, setUnlockPassword] = useState('')
   const [encryptPassword, setEncryptPassword] = useState('')
   
-  // Watermark Settings
   const [watermarkText, setWatermarkText] = useState('')
   const [watermarkPlacement, setWatermarkPlacement] = useState('center')
   const [watermarkOpacity, setWatermarkOpacity] = useState(30)
   
-  // Compression Settings
   const [enableCompression, setEnableCompression] = useState(false)
   const [compressionQuality, setCompressionQuality] = useState(70)
 
@@ -104,11 +97,13 @@ export default function PdfEditor() {
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`
+      // DYNAMICALLY IMPORT PDF.JS TO BYPASS BUILD ERRORS
+      import('pdfjs-dist').then((pdfjsLib) => {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`
+      })
     }
   }, [])
 
-  // --- FILE HANDLING LOGIC ---
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return
     setIsProcessing(true)
@@ -120,6 +115,9 @@ export default function PdfEditor() {
         if (file.type === 'application/pdf') {
           setLoadingText('Extracting PDF pages...')
           const arrayBuffer = await file.arrayBuffer()
+          
+          // DYNAMICALLY IMPORT PDF.JS
+          const pdfjsLib = await import('pdfjs-dist')
           
           let pdf;
           try {
@@ -142,7 +140,6 @@ export default function PdfEditor() {
             canvas.height = viewport.height
             canvas.width = viewport.width
 
-            // Bypass volatile pdfjs-dist TypeScript definitions with as any
             await page.render({ canvasContext: context, viewport } as any).promise
             
             newPages.push({
@@ -164,7 +161,7 @@ export default function PdfEditor() {
       }
 
       setPages(prev => [...prev, ...newPages])
-      setUnlockPassword('') // Clear after successful use
+      setUnlockPassword('')
     } catch (error) {
       alert("Failed to process the file.")
     } finally {
@@ -178,7 +175,6 @@ export default function PdfEditor() {
     accept: { 'application/pdf': ['.pdf'], 'image/jpeg': ['.jpg', '.jpeg'], 'image/png': ['.png'], 'image/webp': ['.webp'] }
   })
 
-  // --- GRID ACTIONS ---
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event
     if (over && active.id !== over.id) {
@@ -196,7 +192,6 @@ export default function PdfEditor() {
   }
   const clearAll = () => setPages([])
 
-  // --- PDF GENERATION ENGINE ---
   const generatePdfBlob = async (): Promise<Blob | null> => {
     if (pages.length === 0) return null
 
@@ -213,7 +208,6 @@ export default function PdfEditor() {
       const ctx = canvas.getContext('2d')
       if (!ctx) continue
 
-      // True Rotation: Swap dimensions if rotated 90 or 270 degrees
       const isRotated = rotation % 180 !== 0
       canvas.width = isRotated ? img.height : img.width
       canvas.height = isRotated ? img.width : img.height
@@ -226,7 +220,6 @@ export default function PdfEditor() {
       ctx.drawImage(img, -img.width / 2, -img.height / 2, img.width, img.height)
       ctx.setTransform(1, 0, 0, 1, 0, 0)
       
-      // Apply Watermark
       if (watermarkText) {
         const fontSize = Math.max(Math.floor(canvas.width / 15), 20)
         ctx.font = `bold ${fontSize}px sans-serif`
@@ -270,7 +263,6 @@ export default function PdfEditor() {
         pdf!.addPage([canvas.width, canvas.height], orientation)
       }
 
-      // If compression isn't explicitly enabled, default to a visually lossless but highly compressed JPEG (0.92)
       const outputQuality = enableCompression ? (compressionQuality / 100) : 0.92
       const processedData = canvas.toDataURL('image/jpeg', outputQuality)
       pdf!.addImage(processedData, 'JPEG', 0, 0, canvas.width, canvas.height)
@@ -279,7 +271,6 @@ export default function PdfEditor() {
     return pdf ? pdf.output('blob') : null
   }
 
-  // --- ACTIONS ---
   const handlePreview = async () => {
     setIsProcessing(true)
     setLoadingText('Generating Preview...')

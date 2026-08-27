@@ -2,7 +2,6 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useDropzone } from 'react-dropzone'
-import * as pdfjsLib from 'pdfjs-dist'
 import { jsPDF } from 'jspdf'
 import { writePsdBuffer } from 'ag-psd'
 import * as UTIF from 'utif'
@@ -18,7 +17,10 @@ export default function AiConverter() {
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`
+      // DYNAMICALLY IMPORT PDF.JS TO BYPASS DOMMatrix SSR BUILD CRASHES
+      import('pdfjs-dist').then((pdfjsLib) => {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`
+      })
     }
   }, [])
 
@@ -30,6 +32,10 @@ export default function AiConverter() {
     
     try {
       const arrayBuffer = await aiFile.arrayBuffer()
+      
+      // DYNAMICALLY IMPORT PDF.JS HERE AS WELL
+      const pdfjsLib = await import('pdfjs-dist')
+      
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
       const page = await pdf.getPage(1)
       
