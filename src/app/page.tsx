@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import dynamic from 'next/dynamic'
+import CustomDropdown from '@/components/CustomDropdown'
 
 // Dynamically import heavy, browser-only components to completely bypass SSR build crashes
 const FileUploader = dynamic(() => import('@/components/FileUploader'), { ssr: false })
@@ -12,8 +13,10 @@ const AiConverter = dynamic(() => import('@/components/AiConverter'), { ssr: fal
 const QrGenerator = dynamic(() => import('@/components/QrGenerator'), { ssr: false })
 const PaletteExtractor = dynamic(() => import('@/components/PaletteExtractor'), { ssr: false })
 
+type AppMode = 'image' | 'pdf' | 'batch' | 'ai' | 'qr' | 'palette'
+
 export default function Home() {
-  const [appMode, setAppMode] = useState<'image' | 'pdf' | 'batch' | 'ai' | 'qr' | 'palette'>('image')
+  const [appMode, setAppMode] = useState<AppMode>('image')
   const [activeFile, setActiveFile] = useState<File | null>(null)
 
   const handleFileSelect = (file: File) => {
@@ -30,6 +33,15 @@ export default function Home() {
     setActiveFile(null)
   }
 
+  const navOptions = [
+    { value: 'image', label: 'Single Image' },
+    { value: 'batch', label: 'Batch Processor' },
+    { value: 'pdf', label: 'PDF Tools' },
+    { value: 'ai', label: 'AI Converter' },
+    { value: 'palette', label: 'Color Palette' },
+    { value: 'qr', label: 'QR Code' }
+  ]
+
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900 font-sans p-4 sm:p-6 md:p-12">
       <div className="max-w-6xl mx-auto space-y-6 sm:space-y-8">
@@ -42,46 +54,58 @@ export default function Home() {
             </p>
           </div>
 
-          {/* Responsive Nav Bar: Scrollable horizontally on mobile, wrapped/centered on desktop */}
-          <div className="relative w-full max-w-full mx-auto">
-            <div className="flex sm:inline-flex flex-nowrap sm:flex-wrap justify-start sm:justify-center bg-slate-200/50 p-1 rounded-lg gap-1 overflow-x-auto max-w-full scroll-smooth w-full sm:w-auto shadow-inner">
+          <div className="relative w-full max-w-full mx-auto flex flex-col items-center">
+            
+            {/* Mobile Nav: Dropdown (Visible only on small screens) */}
+            <div className="w-full max-w-xs sm:hidden relative z-[100]">
+              <CustomDropdown
+                value={appMode}
+                onChange={(val) => setAppMode(val as AppMode)}
+                options={navOptions}
+                direction="down"
+              />
+            </div>
+
+            {/* Desktop Nav: Button Row (Visible only on sm and larger screens) */}
+            <div className="hidden sm:inline-flex flex-wrap justify-center bg-slate-200/50 p-1 rounded-lg gap-1 max-w-full shadow-inner">
               <button 
                 onClick={() => setAppMode('image')} 
-                className={`flex-shrink-0 px-4 py-2.5 sm:py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'image' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                className={`flex-shrink-0 px-4 py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'image' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
               >
                 Single Image
               </button>
               <button 
                 onClick={() => setAppMode('batch')} 
-                className={`flex-shrink-0 px-4 py-2.5 sm:py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'batch' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                className={`flex-shrink-0 px-4 py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'batch' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
               >
                 Batch Processor
               </button>
               <button 
                 onClick={() => setAppMode('pdf')} 
-                className={`flex-shrink-0 px-4 py-2.5 sm:py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'pdf' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                className={`flex-shrink-0 px-4 py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'pdf' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
               >
                 PDF Tools
               </button>
               <button 
                 onClick={() => setAppMode('ai')} 
-                className={`flex-shrink-0 px-4 py-2.5 sm:py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'ai' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                className={`flex-shrink-0 px-4 py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'ai' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
               >
                 AI Converter
               </button>
               <button 
                 onClick={() => setAppMode('palette')} 
-                className={`flex-shrink-0 px-4 py-2.5 sm:py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'palette' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                className={`flex-shrink-0 px-4 py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'palette' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
               >
                 Color Palette
               </button>
               <button 
                 onClick={() => setAppMode('qr')} 
-                className={`flex-shrink-0 px-4 py-2.5 sm:py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'qr' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                className={`flex-shrink-0 px-4 py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'qr' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
               >
                 QR Code
               </button>
             </div>
+
           </div>
         </header>
 
