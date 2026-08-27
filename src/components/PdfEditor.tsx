@@ -8,7 +8,7 @@ import { removeBackground, Config } from '@imgly/background-removal'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, useSortable, rectSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Settings2, Trash2, Eye, Download, RotateCw, Lock, Unlock, FileText, Type, SlidersHorizontal, X, FileImage, ShieldCheck, Layers, Scissors, Wand2, Hash, Edit3, PenTool, Image as ImageIcon, Sparkles, Move, ChevronLeft, ChevronRight, LayoutGrid } from 'lucide-react'
+import { Settings2, Trash2, Eye, Download, RotateCw, Lock, Unlock, FileText, Type, SlidersHorizontal, X, FileImage, ShieldCheck, Layers, Scissors, Wand2, Hash, Edit3, PenTool, Image as ImageIcon, Sparkles, Move, ChevronLeft, ChevronRight, LayoutGrid, Maximize } from 'lucide-react'
 import CustomDropdown from './CustomDropdown'
 
 // --- HELPER FUNCTION ---
@@ -106,8 +106,8 @@ type SignatureState = {
   color: string;
   imageUrl: string | null;
   applyMode: 'all' | 'custom';
-  customPages: string; // e.g. "1-3, 5"
-  placements: Record<number, SigPlacement>; // Individual page placement overrides
+  customPages: string;
+  placements: Record<number, SigPlacement>; 
 }
 
 export default function PdfEditor() {
@@ -118,8 +118,19 @@ export default function PdfEditor() {
   
   const [originalDocName, setOriginalDocName] = useState('document')
 
-  // Expanded Accordion State
-  const [activePanel, setActivePanel] = useState<'security' | 'overlays' | 'compression' | 'merge' | 'split' | 'enhance' | 'signature' | null>(null)
+  // Expanded Accordion State (Export is open by default)
+  const [activePanel, setActivePanel] = useState<'security' | 'overlays' | 'compression' | 'merge' | 'split' | 'enhance' | 'signature' | 'resize' | 'export' | null>('export')
+  
+  // Ref for Smooth Scrolling Focus
+  const panelRefs = useRef<Record<string, HTMLDivElement | null>>({})
+
+  useEffect(() => {
+    if (activePanel && panelRefs.current[activePanel]) {
+      setTimeout(() => {
+        panelRefs.current[activePanel]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+      }, 150)
+    }
+  }, [activePanel])
 
   const [unlockPassword, setUnlockPassword] = useState('')
   const [encryptPassword, setEncryptPassword] = useState('')
@@ -148,16 +159,23 @@ export default function PdfEditor() {
   const [resizingState, setResizingState] = useState<{ startX: number, startY: number, startScale: number, corner: string } | null>(null)
   
   const [previewPageIndex, setPreviewPageIndex] = useState(0)
-  const [showViewerGrid, setShowViewerGrid] = useState(false) // Toggle for page navigator grid
+  const [showViewerGrid, setShowViewerGrid] = useState(false)
 
   const rightSideSigRef = useRef<HTMLDivElement>(null)
   const modalSigRef = useRef<HTMLDivElement>(null)
 
+  // Resizing State
+  const [resizeWidth, setResizeWidth] = useState<number | ''>('')
+  const [resizeHeight, setResizeHeight] = useState<number | ''>('')
+  const [maintainRatio, setMaintainRatio] = useState(true)
+  const [presetSize, setPresetSize] = useState('custom')
+
   // Compression & Export State
   const [enableCompression, setEnableCompression] = useState(false)
   const [compressionQuality, setCompressionQuality] = useState(70)
-  const [compressionPPI, setCompressionPPI] = useState(150) // PPI option for PDF compression
-  const [compressionGrayscale, setCompressionGrayscale] = useState(false) // Grayscale option for PDF compression
+  const [ppiMode, setPpiMode] = useState<string>('150')
+  const [customPPI, setCustomPPI] = useState<number>(150)
+  const [compressionGrayscale, setCompressionGrayscale] = useState(false)
 
   const [cleanWatermarks, setCleanWatermarks] = useState(false)
   const [splitRanges, setSplitRanges] = useState('')
@@ -180,7 +198,6 @@ export default function PdfEditor() {
     }
   }, [])
 
-  // Sync preview index safely when pages are added/removed
   useEffect(() => {
     if (previewPageIndex >= pages.length && pages.length > 0) {
       setPreviewPageIndex(pages.length - 1)
@@ -373,13 +390,25 @@ export default function PdfEditor() {
     }
   }
 
+  const handlePresetChange = (val: string) => {
+    setPresetSize(val)
+    if (val !== 'custom') {
+      const [w, h] = val.split('x').map(Number)
+      setResizeWidth(w)
+      setResizeHeight(h)
+      setMaintainRatio(false) 
+    } else {
+      setResizeWidth('')
+      setResizeHeight('')
+    }
+  }
+
   // Drag Placement Handlers
   const handlePointerDownSig = (ctx: 'right' | 'modal') => { setIsDraggingSig(true); setDraggingContext(ctx); }
   const handlePointerUpSig = () => { setIsDraggingSig(false); setDraggingContext(null); setResizingState(null); }
   
-  // Resizing Corner Handler
   const handleResizeDown = (e: React.PointerEvent, corner: string, ctx: 'right' | 'modal') => {
-    e.stopPropagation() // Prevent teleport jump
+    e.stopPropagation() 
     setResizingState({
       startX: e.clientX,
       startY: e.clientY,
@@ -397,7 +426,6 @@ export default function PdfEditor() {
       const dy = e.clientY - resizingState.startY
       let delta = 0
       
-      // Calculate scale change based on drag direction
       if (resizingState.corner === 'br') delta = (dx + dy) * 0.2
       else if (resizingState.corner === 'tl') delta = -(dx + dy) * 0.2
       else if (resizingState.corner === 'tr') delta = (dx - dy) * 0.2
@@ -420,7 +448,6 @@ export default function PdfEditor() {
     }
   }
 
-  // Helper rendering to reuse the overlay in both Side-by-Side and Modal views
   const renderSignatureOverlay = (ctx: 'right' | 'modal') => {
     const placement = getSigPlacement(previewPageIndex)
     return (
@@ -431,7 +458,7 @@ export default function PdfEditor() {
           top: `${placement.y}%`,
           transform: 'translate(-50%, -50%)',
           opacity: placement.opacity / 100,
-          pointerEvents: 'none' // Allows clicking through the main container to start drag
+          pointerEvents: 'none'
         }}
       >
         <div className="relative pointer-events-auto group">
@@ -442,13 +469,11 @@ export default function PdfEditor() {
           ) : signature.imageUrl ? (
             <img src={signature.imageUrl} alt="Sig" style={{ width: `${placement.scale * 3}px` }} className="mix-blend-multiply block pointer-events-none" />
           ) : (
-            <div style={{ width: `${placement.scale * 3}px`, height: '40px' }} /> // Empty placeholder
+            <div style={{ width: `${placement.scale * 3}px`, height: '40px' }} /> 
           )}
           
-          {/* Border box when interacting or hovering */}
           <div className={`absolute inset-0 border-2 border-dashed ${(isDraggingSig || resizingState) && draggingContext === ctx ? 'border-blue-500 bg-blue-500/10' : 'border-transparent group-hover:border-slate-300'} rounded pointer-events-none transition-colors`} />
           
-          {/* Resize Handles */}
           <div className="absolute -top-2 -left-2 w-4 h-4 bg-white border-2 border-blue-500 rounded-full cursor-nwse-resize pointer-events-auto opacity-0 group-hover:opacity-100 transition-opacity" onPointerDown={(e) => handleResizeDown(e, 'tl', ctx)} />
           <div className="absolute -top-2 -right-2 w-4 h-4 bg-white border-2 border-blue-500 rounded-full cursor-nesw-resize pointer-events-auto opacity-0 group-hover:opacity-100 transition-opacity" onPointerDown={(e) => handleResizeDown(e, 'tr', ctx)} />
           <div className="absolute -bottom-2 -left-2 w-4 h-4 bg-white border-2 border-blue-500 rounded-full cursor-nesw-resize pointer-events-auto opacity-0 group-hover:opacity-100 transition-opacity" onPointerDown={(e) => handleResizeDown(e, 'bl', ctx)} />
@@ -458,7 +483,6 @@ export default function PdfEditor() {
     )
   }
 
-  // Navigation UI Overlay for Viewer
   const renderPaginationOverlay = () => {
     if (pages.length <= 1) return null;
     return (
@@ -494,7 +518,6 @@ export default function PdfEditor() {
     )
   }
 
-  // Sidebar shared signature controls
   const renderSignatureControls = (context: 'sidebar' | 'modal') => {
     const currentPlacement = getSigPlacement(previewPageIndex)
     return (
@@ -598,6 +621,171 @@ export default function PdfEditor() {
     )
   }
 
+  // Calculate generic target dimensions
+  const calculateTargetDimensions = (origW: number, origH: number) => {
+    let targetWidth = origW;
+    let targetHeight = origH;
+    const rw = typeof resizeWidth === 'number' ? resizeWidth : null;
+    const rh = typeof resizeHeight === 'number' ? resizeHeight : null;
+    
+    if (rw || rh) {
+      if (maintainRatio) {
+        if (rw && rh) {
+          const ratio = Math.min(rw / origW, rh / origH);
+          targetWidth = Math.max(1, Math.round(origW * ratio));
+          targetHeight = Math.max(1, Math.round(origH * ratio));
+        } else if (rw) {
+          targetWidth = rw;
+          targetHeight = Math.max(1, Math.round((origH * rw) / origW));
+        } else if (rh) {
+          targetHeight = rh;
+          targetWidth = Math.max(1, Math.round((origW * rh) / origH));
+        }
+      } else {
+        targetWidth = rw || origW;
+        targetHeight = rh || origH;
+      }
+    }
+    return { targetWidth, targetHeight };
+  }
+
+  const renderPageToCanvas = async (page: PageItem, index: number, forPdf = false) => {
+    const img = await createImage(page.url)
+    const canvas = document.createElement('canvas')
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+
+    const isRotated = page.rotation % 180 !== 0
+    const rawWidth = isRotated ? img.height : img.width
+    const rawHeight = isRotated ? img.width : img.height
+
+    const { targetWidth, targetHeight } = calculateTargetDimensions(rawWidth, rawHeight)
+    
+    let scaleRatio = 1
+    if (forPdf && enableCompression) {
+      const activePPI = ppiMode === 'custom' ? customPPI : Number(ppiMode)
+      if (activePPI > 0) {
+        const maxPixels = 11.7 * activePPI
+        const longestSide = Math.max(targetWidth, targetHeight)
+        if (longestSide > maxPixels) {
+          scaleRatio = maxPixels / longestSide
+        }
+      }
+    }
+
+    canvas.width = targetWidth * scaleRatio
+    canvas.height = targetHeight * scaleRatio
+
+    ctx.fillStyle = '#FFFFFF'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+    ctx.translate(canvas.width / 2, canvas.height / 2)
+    ctx.rotate(((page.rotation + page.fineRotation) * Math.PI) / 180)
+    
+    const scaleX = (targetWidth / rawWidth) * scaleRatio * (page.scale || 1)
+    const scaleY = (targetHeight / rawHeight) * scaleRatio * (page.scale || 1)
+    ctx.scale(scaleX, scaleY)
+    
+    ctx.drawImage(img, -img.width / 2, -img.height / 2, img.width, img.height)
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+
+    // Clean Scan
+    if (cleanWatermarks) {
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+      const data = imgData.data
+      for (let j = 0; j < data.length; j += 4) {
+        const r = data[j], g = data[j+1], b = data[j+2]
+        if (r > 160 && g > 160 && b > 160) {
+          data[j] = 255; data[j+1] = 255; data[j+2] = 255;
+        } 
+        else if (r < 100 && g < 100 && b < 100) {
+          data[j] = 0; data[j+1] = 0; data[j+2] = 0;
+        }
+      }
+      ctx.putImageData(imgData, 0, 0)
+    }
+
+    // Grayscale
+    if (forPdf && enableCompression && compressionGrayscale) {
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+      const data = imgData.data
+      for (let j = 0; j < data.length; j += 4) {
+        const luma = data[j] * 0.299 + data[j+1] * 0.587 + data[j+2] * 0.114
+        data[j] = luma
+        data[j+1] = luma
+        data[j+2] = luma
+      }
+      ctx.putImageData(imgData, 0, 0)
+    }
+
+    // Signature
+    if (signature.enabled && shouldApplySignature(index, signature.applyMode, signature.customPages)) {
+      const placement = getSigPlacement(index)
+      ctx.save()
+      ctx.globalAlpha = placement.opacity / 100
+      const sigX = (placement.x / 100) * canvas.width
+      const sigY = (placement.y / 100) * canvas.height
+
+      if (signature.mode === 'text' && signature.text) {
+        const fontSize = (placement.scale / 100) * canvas.width * 0.1
+        ctx.font = `${fontSize}px ${signature.font}`
+        ctx.fillStyle = signature.color
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(signature.text, sigX, sigY)
+      } else if (signature.mode === 'image' && signature.imageUrl) {
+        const sigImg = await createImage(signature.imageUrl)
+        const baseSigWidth = canvas.width * 0.3
+        const drawWidth = baseSigWidth * (placement.scale / 50)
+        const drawHeight = (sigImg.height / sigImg.width) * drawWidth
+        ctx.drawImage(sigImg, sigX - drawWidth / 2, sigY - drawHeight / 2, drawWidth, drawHeight)
+      }
+      ctx.restore()
+    }
+
+    // Page Numbers
+    if (addPageNumbers) {
+      const fontSize = Math.max(Math.floor(canvas.width / 35), 12)
+      ctx.font = `bold ${fontSize}px sans-serif`
+      ctx.fillStyle = '#000000'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'bottom'
+      ctx.fillText(`${index + 1} / ${pages.length}`, canvas.width / 2, canvas.height - fontSize)
+    }
+
+    // Watermark
+    if (watermarkText) {
+      const fontSize = Math.max(Math.floor(canvas.width / 15), 20)
+      ctx.font = `bold ${fontSize}px sans-serif`
+      ctx.fillStyle = `rgba(150, 150, 150, ${watermarkOpacity / 100})`
+      let x = canvas.width / 2
+      let y = canvas.height / 2
+      let align: CanvasTextAlign = 'center'
+      let baseline: CanvasTextBaseline = 'middle'
+      let angle = -Math.PI / 4
+      const padding = fontSize
+
+      if (watermarkPlacement === 'top-left') {
+        x = padding; y = padding; align = 'left'; baseline = 'top'; angle = 0;
+      } else if (watermarkPlacement === 'top-right') {
+        x = canvas.width - padding; y = padding; align = 'right'; baseline = 'top'; angle = 0;
+      } else if (watermarkPlacement === 'bottom-left') {
+        x = padding; y = canvas.height - padding; align = 'left'; baseline = 'bottom'; angle = 0;
+      } else if (watermarkPlacement === 'bottom-right') {
+        x = canvas.width - padding; y = canvas.height - padding; align = 'right'; baseline = 'bottom'; angle = 0;
+      }
+
+      ctx.translate(x, y)
+      ctx.rotate(angle)
+      ctx.textAlign = align
+      ctx.textBaseline = baseline
+      ctx.fillText(watermarkText, 0, 0)
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+    }
+
+    return canvas;
+  }
+
   // --- PDF GENERATION LOGIC ---
   const generatePdfBlob = async (pagesToExport: PageItem[] = pages): Promise<Blob | null> => {
     if (pagesToExport.length === 0) return null
@@ -605,139 +793,8 @@ export default function PdfEditor() {
     let pdf: jsPDF | null = null;
     
     for (let i = 0; i < pagesToExport.length; i++) {
-      const { url, rotation, fineRotation, scale } = pagesToExport[i]
-      
-      const img = await createImage(url)
-
-      const canvas = document.createElement('canvas')
-      const ctx = canvas.getContext('2d')
-      if (!ctx) continue
-
-      const isRotated = rotation % 180 !== 0
-      let rawWidth = isRotated ? img.height : img.width
-      let rawHeight = isRotated ? img.width : img.height
-      let scaleRatio = 1
-
-      // Apply PDF Compression (PPI downscaling)
-      if (enableCompression && compressionPPI > 0) {
-        // Assume 11.7 inches for the longest side as standard A4/Letter size
-        const maxPixels = 11.7 * compressionPPI
-        const longestSide = Math.max(rawWidth, rawHeight)
-        if (longestSide > maxPixels) {
-          scaleRatio = maxPixels / longestSide
-        }
-      }
-
-      canvas.width = rawWidth * scaleRatio
-      canvas.height = rawHeight * scaleRatio
-
-      ctx.fillStyle = '#FFFFFF'
-      ctx.fillRect(0, 0, canvas.width, canvas.height)
-
-      ctx.translate(canvas.width / 2, canvas.height / 2)
-      ctx.rotate(((rotation + fineRotation) * Math.PI) / 180)
-      
-      const currentScale = (scale || 1) * scaleRatio
-      ctx.scale(currentScale, currentScale)
-      ctx.drawImage(img, -img.width / 2, -img.height / 2, img.width, img.height)
-      ctx.setTransform(1, 0, 0, 1, 0, 0)
-      
-      // Clean Scan
-      if (cleanWatermarks) {
-        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-        const data = imgData.data
-        for (let j = 0; j < data.length; j += 4) {
-          const r = data[j], g = data[j+1], b = data[j+2]
-          if (r > 160 && g > 160 && b > 160) {
-            data[j] = 255; data[j+1] = 255; data[j+2] = 255;
-          } 
-          else if (r < 100 && g < 100 && b < 100) {
-            data[j] = 0; data[j+1] = 0; data[j+2] = 0;
-          }
-        }
-        ctx.putImageData(imgData, 0, 0)
-      }
-
-      // Grayscale Conversion
-      if (enableCompression && compressionGrayscale) {
-        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-        const data = imgData.data
-        for (let j = 0; j < data.length; j += 4) {
-          const luma = data[j] * 0.299 + data[j+1] * 0.587 + data[j+2] * 0.114
-          data[j] = luma
-          data[j+1] = luma
-          data[j+2] = luma
-        }
-        ctx.putImageData(imgData, 0, 0)
-      }
-
-      // Add Signature
-      if (signature.enabled && shouldApplySignature(i, signature.applyMode, signature.customPages)) {
-        const placement = getSigPlacement(i)
-        
-        ctx.save()
-        ctx.globalAlpha = placement.opacity / 100
-        const sigX = (placement.x / 100) * canvas.width
-        const sigY = (placement.y / 100) * canvas.height
-
-        if (signature.mode === 'text' && signature.text) {
-          const fontSize = (placement.scale / 100) * canvas.width * 0.1 // Scaled to canvas width
-          ctx.font = `${fontSize}px ${signature.font}`
-          ctx.fillStyle = signature.color
-          ctx.textAlign = 'center'
-          ctx.textBaseline = 'middle'
-          ctx.fillText(signature.text, sigX, sigY)
-        } else if (signature.mode === 'image' && signature.imageUrl) {
-          const sigImg = await createImage(signature.imageUrl)
-          const baseSigWidth = canvas.width * 0.3 // 30% of page default
-          const drawWidth = baseSigWidth * (placement.scale / 50)
-          const drawHeight = (sigImg.height / sigImg.width) * drawWidth
-          ctx.drawImage(sigImg, sigX - drawWidth / 2, sigY - drawHeight / 2, drawWidth, drawHeight)
-        }
-        ctx.restore()
-      }
-
-      // Add Page Numbers
-      if (addPageNumbers) {
-        const fontSize = Math.max(Math.floor(canvas.width / 35), 12)
-        ctx.font = `bold ${fontSize}px sans-serif`
-        ctx.fillStyle = '#000000'
-        ctx.textAlign = 'center'
-        ctx.textBaseline = 'bottom'
-        ctx.fillText(`${i + 1} / ${pagesToExport.length}`, canvas.width / 2, canvas.height - fontSize)
-      }
-
-      // Add Watermark
-      if (watermarkText) {
-        const fontSize = Math.max(Math.floor(canvas.width / 15), 20)
-        ctx.font = `bold ${fontSize}px sans-serif`
-        ctx.fillStyle = `rgba(150, 150, 150, ${watermarkOpacity / 100})`
-
-        let x = canvas.width / 2
-        let y = canvas.height / 2
-        let align: CanvasTextAlign = 'center'
-        let baseline: CanvasTextBaseline = 'middle'
-        let angle = -Math.PI / 4
-
-        const padding = fontSize
-
-        if (watermarkPlacement === 'top-left') {
-          x = padding; y = padding; align = 'left'; baseline = 'top'; angle = 0;
-        } else if (watermarkPlacement === 'top-right') {
-          x = canvas.width - padding; y = padding; align = 'right'; baseline = 'top'; angle = 0;
-        } else if (watermarkPlacement === 'bottom-left') {
-          x = padding; y = canvas.height - padding; align = 'left'; baseline = 'bottom'; angle = 0;
-        } else if (watermarkPlacement === 'bottom-right') {
-          x = canvas.width - padding; y = canvas.height - padding; align = 'right'; baseline = 'bottom'; angle = 0;
-        }
-
-        ctx.translate(x, y)
-        ctx.rotate(angle)
-        ctx.textAlign = align
-        ctx.textBaseline = baseline
-        ctx.fillText(watermarkText, 0, 0)
-        ctx.setTransform(1, 0, 0, 1, 0, 0)
-      }
+      const canvas = await renderPageToCanvas(pagesToExport[i], i, true)
+      if (!canvas) continue
 
       const orientation = canvas.width > canvas.height ? 'l' : 'p'
       
@@ -767,17 +824,8 @@ export default function PdfEditor() {
       <head><meta charset='utf-8'><title>Exported Doc</title></head><body>`
       
       for (let i = 0; i < pages.length; i++) {
-        const canvas = document.createElement('canvas')
-        const ctx = canvas.getContext('2d')
-        if(!ctx) continue
-        
-        const img = await createImage(pages[i].url)
-        canvas.width = img.width; canvas.height = img.height
-        ctx.fillStyle = '#FFFFFF'; ctx.fillRect(0, 0, canvas.width, canvas.height)
-        ctx.translate(canvas.width/2, canvas.height/2)
-        ctx.rotate(((pages[i].rotation + pages[i].fineRotation) * Math.PI) / 180)
-        ctx.scale(pages[i].scale, pages[i].scale)
-        ctx.drawImage(img, -img.width/2, -img.height/2, img.width, img.height)
+        const canvas = await renderPageToCanvas(pages[i], i, false)
+        if(!canvas) continue
         
         const b64 = canvas.toDataURL('image/jpeg', 0.85)
         htmlContent += `<img src="${b64}" style="width:100%; max-width:800px; page-break-after:always; display:block; margin-bottom:20px;" />`
@@ -899,9 +947,10 @@ export default function PdfEditor() {
     try {
       const zip = new JSZip()
       for (let i = 0; i < pages.length; i++) {
-        const response = await fetch(pages[i].url)
-        const blob = await response.blob()
-        zip.file(`page-${String(i + 1).padStart(3, '0')}.png`, blob)
+        const canvas = await renderPageToCanvas(pages[i], i, false)
+        if (!canvas) continue
+        const blob = await new Promise<Blob | null>(res => canvas.toBlob(res, 'image/jpeg', 0.95))
+        if (blob) zip.file(`page-${String(i + 1).padStart(3, '0')}.jpg`, blob)
       }
       const zipContent = await zip.generateAsync({ type: 'blob' })
       const downloadUrl = URL.createObjectURL(zipContent)
@@ -926,22 +975,22 @@ export default function PdfEditor() {
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col lg:flex-row h-auto lg:h-[650px] min-h-[650px]">
         
         {/* Sidebar Settings */}
-        <div className="w-full lg:w-80 h-auto lg:h-full flex flex-col gap-4 overflow-y-auto p-4 lg:p-6 bg-slate-50 border-b lg:border-b-0 lg:border-r border-slate-200 order-2 lg:order-1">
-          <div className="flex justify-between items-center border-b border-slate-200 pb-2 flex-shrink-0">
+        <div className="w-full lg:w-80 h-auto lg:h-full flex flex-col bg-slate-50 border-b lg:border-b-0 lg:border-r border-slate-200 order-2 lg:order-1 relative">
+          <div className="p-4 lg:p-6 pb-2 border-b border-slate-200 flex-shrink-0 z-10 bg-slate-50">
             <h4 className="text-xs font-bold text-slate-800 uppercase tracking-widest flex items-center gap-2">
               <Settings2 className="w-4 h-4" /> Doc Settings
             </h4>
           </div>
 
-          <div className="space-y-3 flex-1 overflow-y-auto pr-1 pb-4">
+          <div className="space-y-3 flex-1 overflow-y-auto p-4 lg:p-6 pt-4 pb-4">
             
             {/* Merge Accordion */}
-            <div className="border border-slate-200 rounded-lg overflow-hidden flex-shrink-0 bg-white shadow-sm">
-              <button onClick={() => setActivePanel(activePanel === 'merge' ? null : 'merge')} className="w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors">
+            <div ref={(el) => { panelRefs.current['merge'] = el; }} className={`border border-slate-200 flex-shrink-0 bg-white shadow-sm transition-all relative ${activePanel === 'merge' ? 'rounded-lg z-20' : 'rounded-lg z-0 overflow-hidden'}`}>
+              <button onClick={() => setActivePanel(activePanel === 'merge' ? null : 'merge')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activePanel === 'merge' ? 'rounded-t-lg' : 'rounded-lg'}`}>
                 <Layers className="w-4 h-4 text-[#6384A3]" /> Merge Documents
               </button>
               {activePanel === 'merge' && (
-                <div className="p-4 space-y-4 border-t border-slate-100">
+                <div className="p-4 space-y-4 border-t border-slate-100 rounded-b-lg">
                   <p className="text-xs text-slate-500">Upload multiple PDFs or images to seamlessly append them to your current document.</p>
                   <button 
                     onClick={() => document.getElementById('merge-file-upload')?.click()} 
@@ -962,12 +1011,12 @@ export default function PdfEditor() {
             </div>
 
             {/* Split Accordion */}
-            <div className="border border-slate-200 rounded-lg overflow-hidden flex-shrink-0 bg-white shadow-sm">
-              <button onClick={() => setActivePanel(activePanel === 'split' ? null : 'split')} className="w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors">
+            <div ref={(el) => { panelRefs.current['split'] = el; }} className={`border border-slate-200 flex-shrink-0 bg-white shadow-sm transition-all relative ${activePanel === 'split' ? 'rounded-lg z-20' : 'rounded-lg z-0 overflow-hidden'}`}>
+              <button onClick={() => setActivePanel(activePanel === 'split' ? null : 'split')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activePanel === 'split' ? 'rounded-t-lg' : 'rounded-lg'}`}>
                 <Scissors className="w-4 h-4 text-[#6384A3]" /> Split Document
               </button>
               {activePanel === 'split' && (
-                <div className="p-4 space-y-4 border-t border-slate-100">
+                <div className="p-4 space-y-4 border-t border-slate-100 rounded-b-lg">
                   <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">Ranges to extract (e.g. 1-2, 5, 8-10)</p>
                   <input type="text" placeholder="1-3, 5-6" value={splitRanges} onChange={(e) => setSplitRanges(e.target.value)} className="w-full p-2 border border-slate-200 rounded text-sm bg-white" />
                   <button onClick={handleSplitPdf} disabled={isProcessing || pages.length === 0} className="w-full py-2 bg-slate-800 text-white font-bold text-[10px] uppercase tracking-widest rounded-lg hover:bg-black transition-colors shadow-sm">
@@ -978,12 +1027,12 @@ export default function PdfEditor() {
             </div>
 
             {/* Signature Studio Accordion */}
-            <div className="border border-slate-200 rounded-lg overflow-hidden flex-shrink-0 bg-white shadow-sm">
-              <button onClick={() => setActivePanel(activePanel === 'signature' ? null : 'signature')} className="w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors">
+            <div ref={(el) => { panelRefs.current['signature'] = el; }} className={`border border-slate-200 flex-shrink-0 bg-white shadow-sm transition-all relative ${activePanel === 'signature' ? 'rounded-lg z-20' : 'rounded-lg z-0 overflow-hidden'}`}>
+              <button onClick={() => setActivePanel(activePanel === 'signature' ? null : 'signature')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activePanel === 'signature' ? 'rounded-t-lg' : 'rounded-lg'}`}>
                 <PenTool className="w-4 h-4 text-[#6384A3]" /> Signature Studio
               </button>
               {activePanel === 'signature' && (
-                <div className="p-4 space-y-4 border-t border-slate-100">
+                <div className="p-4 space-y-4 border-t border-slate-100 rounded-b-lg">
                   <label className="flex items-center gap-2 text-xs font-bold text-slate-700 uppercase tracking-wider cursor-pointer border-b border-slate-100 pb-3">
                     <input type="checkbox" checked={signature.enabled} onChange={(e) => setSignature(s => ({ ...s, enabled: e.target.checked }))} className="w-4 h-4 accent-[#6384A3] rounded" />
                     Enable Signature
@@ -999,12 +1048,12 @@ export default function PdfEditor() {
             </div>
 
             {/* Enhance & Clean Accordion */}
-            <div className="border border-slate-200 rounded-lg overflow-hidden flex-shrink-0 bg-white shadow-sm">
-              <button onClick={() => setActivePanel(activePanel === 'enhance' ? null : 'enhance')} className="w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors">
+            <div ref={(el) => { panelRefs.current['enhance'] = el; }} className={`border border-slate-200 flex-shrink-0 bg-white shadow-sm transition-all relative ${activePanel === 'enhance' ? 'rounded-lg z-20' : 'rounded-lg z-0 overflow-hidden'}`}>
+              <button onClick={() => setActivePanel(activePanel === 'enhance' ? null : 'enhance')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activePanel === 'enhance' ? 'rounded-t-lg' : 'rounded-lg'}`}>
                 <Wand2 className="w-4 h-4 text-[#6384A3]" /> Scan Cleaner
               </button>
               {activePanel === 'enhance' && (
-                <div className="p-4 space-y-4 border-t border-slate-100">
+                <div className="p-4 space-y-4 border-t border-slate-100 rounded-b-lg">
                   <label className="flex items-start gap-2 text-xs font-bold text-slate-700 cursor-pointer">
                     <input type="checkbox" checked={cleanWatermarks} onChange={(e) => setCleanWatermarks(e.target.checked)} className="w-4 h-4 mt-0.5 accent-[#6384A3] rounded" />
                     <div>
@@ -1017,12 +1066,12 @@ export default function PdfEditor() {
             </div>
 
             {/* Security Accordion */}
-            <div className="border border-slate-200 rounded-lg overflow-hidden flex-shrink-0 bg-white shadow-sm">
-              <button onClick={() => setActivePanel(activePanel === 'security' ? null : 'security')} className="w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors">
+            <div ref={(el) => { panelRefs.current['security'] = el; }} className={`border border-slate-200 flex-shrink-0 bg-white shadow-sm transition-all relative ${activePanel === 'security' ? 'rounded-lg z-20' : 'rounded-lg z-0 overflow-hidden'}`}>
+              <button onClick={() => setActivePanel(activePanel === 'security' ? null : 'security')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activePanel === 'security' ? 'rounded-t-lg' : 'rounded-lg'}`}>
                 <ShieldCheck className="w-4 h-4 text-[#6384A3]" /> Security & Passwords
               </button>
               {activePanel === 'security' && (
-                <div className="p-4 space-y-4 border-t border-slate-100">
+                <div className="p-4 space-y-4 border-t border-slate-100 rounded-b-lg">
                   <div className="space-y-2">
                     <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
                       <Unlock className="w-3 h-3" /> Unlock PDF
@@ -1040,12 +1089,12 @@ export default function PdfEditor() {
             </div>
 
             {/* Overlays Accordion */}
-            <div className="border border-slate-200 rounded-lg overflow-hidden flex-shrink-0 bg-white shadow-sm">
-              <button onClick={() => setActivePanel(activePanel === 'overlays' ? null : 'overlays')} className="w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors">
+            <div ref={(el) => { panelRefs.current['overlays'] = el; }} className={`border border-slate-200 flex-shrink-0 bg-white shadow-sm transition-all relative ${activePanel === 'overlays' ? 'rounded-lg z-20' : 'rounded-lg z-0 overflow-hidden'}`}>
+              <button onClick={() => setActivePanel(activePanel === 'overlays' ? null : 'overlays')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activePanel === 'overlays' ? 'rounded-t-lg' : 'rounded-lg'}`}>
                 <Type className="w-4 h-4 text-[#6384A3]" /> Text Overlays
               </button>
               {activePanel === 'overlays' && (
-                <div className="p-4 space-y-4 border-t border-slate-100">
+                <div className="p-4 space-y-4 border-t border-slate-100 rounded-b-lg">
                   <label className="flex items-center gap-2 text-xs font-bold text-slate-700 uppercase tracking-wider cursor-pointer border-b border-slate-100 pb-3">
                     <input type="checkbox" checked={addPageNumbers} onChange={(e) => setAddPageNumbers(e.target.checked)} className="w-4 h-4 accent-[#6384A3] rounded" />
                     <Hash className="w-3 h-3 text-[#6384A3]" /> Stamp Page Numbers
@@ -1080,13 +1129,70 @@ export default function PdfEditor() {
               )}
             </div>
 
+            {/* Resize Dimensions Accordion */}
+            <div ref={(el) => { panelRefs.current['resize'] = el; }} className={`border border-slate-200 flex-shrink-0 bg-white shadow-sm transition-all relative ${activePanel === 'resize' ? 'rounded-lg z-20' : 'rounded-lg z-0 overflow-hidden'}`}>
+              <button onClick={() => setActivePanel(activePanel === 'resize' ? null : 'resize')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activePanel === 'resize' ? 'rounded-t-lg' : 'rounded-lg'}`}>
+                <Maximize className="w-4 h-4 text-[#6384A3]" /> Resize Dimensions
+              </button>
+              {activePanel === 'resize' && (
+                <div className="p-4 bg-white border-t border-slate-100 space-y-4 rounded-b-lg">
+                  <div className="space-y-3">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Output Dimensions</label>
+                    <CustomDropdown 
+                      value={presetSize} 
+                      onChange={handlePresetChange} 
+                      direction="up"
+                      options={[
+                        { value: 'custom', label: 'Original / Custom Size' },
+                        { value: '472x591', label: 'BD Passport (472x591 px)' },
+                        { value: '236x295', label: 'BD Stamp Size (236x295 px)' },
+                        { value: '1920x1080', label: 'Full HD (1920x1080 px)' },
+                        { value: '1080x1080', label: 'Instagram Square (1080x1080 px)' },
+                      ]}
+                    />
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Width (px)</label>
+                        <input 
+                          type="number" 
+                          placeholder="Auto" 
+                          value={resizeWidth} 
+                          onChange={(e) => { setResizeWidth(e.target.value ? Number(e.target.value) : ''); setPresetSize('custom'); }} 
+                          className="w-full p-2 border border-slate-200 rounded text-sm bg-white" 
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Height (px)</label>
+                        <input 
+                          type="number" 
+                          placeholder="Auto" 
+                          value={resizeHeight} 
+                          onChange={(e) => { setResizeHeight(e.target.value ? Number(e.target.value) : ''); setPresetSize('custom'); }} 
+                          className="w-full p-2 border border-slate-200 rounded text-sm bg-white" 
+                        />
+                      </div>
+                    </div>
+                    <label className="flex items-center gap-2 mt-2 text-[10px] font-bold text-slate-600 cursor-pointer uppercase tracking-widest">
+                      <input 
+                        type="checkbox" 
+                        checked={maintainRatio} 
+                        onChange={(e) => setMaintainRatio(e.target.checked)} 
+                        className="w-3.5 h-3.5 accent-[#6384A3] rounded cursor-pointer" 
+                      />
+                      Maintain Ratio (Fit Inside)
+                    </label>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Compression Accordion */}
-            <div className="border border-slate-200 rounded-lg overflow-hidden flex-shrink-0 bg-white shadow-sm">
-              <button onClick={() => setActivePanel(activePanel === 'compression' ? null : 'compression')} className="w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors">
+            <div ref={(el) => { panelRefs.current['compression'] = el; }} className={`border border-slate-200 flex-shrink-0 bg-white shadow-sm transition-all relative ${activePanel === 'compression' ? 'rounded-lg z-20' : 'rounded-lg z-0 overflow-hidden'}`}>
+              <button onClick={() => setActivePanel(activePanel === 'compression' ? null : 'compression')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activePanel === 'compression' ? 'rounded-t-lg' : 'rounded-lg'}`}>
                 <SlidersHorizontal className="w-4 h-4 text-[#6384A3]" /> Doc Compression
               </button>
               {activePanel === 'compression' && (
-                <div className="p-4 space-y-4 border-t border-slate-100">
+                <div className="p-4 space-y-4 border-t border-slate-100 rounded-b-lg">
                   <label className="flex items-center gap-2 text-xs font-bold text-slate-700 uppercase tracking-wider cursor-pointer">
                     <input type="checkbox" checked={enableCompression} onChange={(e) => setEnableCompression(e.target.checked)} className="w-4 h-4 accent-[#6384A3] rounded" />
                     Force File Shrink
@@ -1104,16 +1210,33 @@ export default function PdfEditor() {
                       <div className="space-y-1 pt-1">
                         <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">Max Resolution (PPI)</label>
                         <CustomDropdown 
-                          value={compressionPPI.toString()} 
-                          onChange={(val) => setCompressionPPI(Number(val))} 
+                          value={ppiMode} 
+                          onChange={(val) => setPpiMode(val)} 
                           direction="up"
                           options={[
                             { value: '72', label: '72 PPI (Web / Smallest)' },
                             { value: '150', label: '150 PPI (Medium)' },
                             { value: '300', label: '300 PPI (Print / High)' },
-                            { value: '0', label: 'Original Resolution' }
+                            { value: '0', label: 'Original Resolution' },
+                            { value: 'custom', label: 'Custom PPI Range' }
                           ]} 
                         />
+                        {ppiMode === 'custom' && (
+                          <div className="space-y-1 mt-3 p-2 bg-slate-50 border border-slate-100 rounded">
+                            <div className="flex justify-between text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                              <span>Custom PPI</span>
+                              <span className="text-[#6384A3]">{customPPI} PPI</span>
+                            </div>
+                            <input 
+                              type="range" 
+                              min="10" 
+                              max="1200" 
+                              value={customPPI} 
+                              onChange={(e) => setCustomPPI(Number(e.target.value))} 
+                              className="w-full accent-[#6384A3]" 
+                            />
+                          </div>
+                        )}
                       </div>
 
                       <div className="pt-1">
@@ -1135,24 +1258,35 @@ export default function PdfEditor() {
                 </div>
               )}
             </div>
+
+            {/* Export Format Accordion */}
+            <div ref={(el) => { panelRefs.current['export'] = el; }} className={`border border-slate-200 flex-shrink-0 bg-white shadow-sm transition-all relative mb-4 ${activePanel === 'export' ? 'rounded-lg z-20' : 'rounded-lg z-0 overflow-hidden'}`}>
+              <button onClick={() => setActivePanel(activePanel === 'export' ? null : 'export')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activePanel === 'export' ? 'rounded-t-lg' : 'rounded-lg'}`}>
+                <Type className="w-4 h-4 text-[#6384A3]" /> Format & Export
+              </button>
+              {activePanel === 'export' && (
+                <div className="p-4 bg-white border-t border-slate-100 space-y-4 rounded-b-lg">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Main Export Format</label>
+                    <CustomDropdown 
+                      value={exportFormat} 
+                      onChange={setExportFormat} 
+                      direction="up"
+                      options={[
+                        { value: 'pdf', label: 'PDF Document (.pdf)' },
+                        { value: 'word', label: 'Word Document (.doc)' },
+                        { value: 'images', label: 'Image Archive (.zip)' },
+                      ]} 
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
           </div>
 
-          {/* Export Actions */}
-          <div className="mt-auto pt-4 border-t border-slate-200 flex-shrink-0 space-y-3">
-            <div className="space-y-2">
-              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Main Export Format</label>
-              <CustomDropdown 
-                value={exportFormat} 
-                onChange={setExportFormat} 
-                direction="up"
-                options={[
-                  { value: 'pdf', label: 'PDF Document (.pdf)' },
-                  { value: 'word', label: 'Word Document (.doc)' },
-                  { value: 'images', label: 'Image Archive (.zip)' },
-                ]} 
-              />
-            </div>
-            
+          {/* Global Actions (Sticky Bottom) */}
+          <div className="p-4 lg:p-6 border-t border-slate-200 flex-shrink-0 z-10 bg-slate-50">
             <div className="flex gap-2">
               <button onClick={handlePreview} disabled={isProcessing || pages.length === 0} className="flex-[0.5] py-2.5 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 disabled:opacity-50 transition-colors flex items-center justify-center shadow-sm" title="Preview File">
                 <Eye className="w-4 h-4" />
@@ -1188,7 +1322,7 @@ export default function PdfEditor() {
             // Live Signature Preview & Positioning (Right Side)
             <div className="flex-1 flex flex-col bg-slate-100 rounded-xl border border-slate-200 relative select-none animate-in fade-in h-full min-h-[400px] overflow-hidden">
               <div className="absolute top-3 left-3 z-30 bg-white/90 px-3 py-1.5 rounded shadow-sm text-[10px] font-bold text-slate-600 uppercase tracking-widest flex items-center gap-2 border border-slate-200 pointer-events-none">
-                <Move className="w-3.5 h-3.5" /> {signature.enabled ? "Drag or Resize Signature" : "Document Preview"}
+                <Move className="w-3.5 h-3.5" /> Drag or Resize Signature
               </div>
 
               {renderPaginationOverlay()}
@@ -1222,7 +1356,7 @@ export default function PdfEditor() {
                       alt="Placement Target"
                       draggable={false}
                     />
-                    {signature.enabled && appliesToCurrent && renderSignatureOverlay('right')}
+                    {renderSignatureOverlay('right')}
                   </div>
                 )}
               </div>
@@ -1286,7 +1420,7 @@ export default function PdfEditor() {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="p-4 space-y-4">
+            <div className="p-4 space-y-4 overflow-visible">
               {renderSignatureControls('modal')}
               <button onClick={() => setShowSigModal(false)} className="w-full mt-4 px-8 py-3 bg-slate-800 hover:bg-black text-white font-bold rounded uppercase tracking-widest text-xs transition-colors shadow-sm">
                 Save & Close
@@ -1329,7 +1463,7 @@ export default function PdfEditor() {
                      draggable={false}
                    />
                    
-                   {appliesToCurrent && renderSignatureOverlay('modal')}
+                   {renderSignatureOverlay('modal')}
                  </div>
                )}
              </div>
