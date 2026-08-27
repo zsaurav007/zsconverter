@@ -5,10 +5,10 @@ import { useDropzone } from 'react-dropzone'
 import { jsPDF } from 'jspdf'
 import JSZip from 'jszip'
 import { removeBackground, Config } from '@imgly/background-removal'
-import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core'
+import { DndContext, closestCenter, TouchSensor, MouseSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, useSortable, rectSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Settings2, Trash2, Eye, Download, RotateCw, Lock, Unlock, FileText, Type, SlidersHorizontal, X, FileImage, ShieldCheck, Layers, Scissors, Wand2, Hash, Edit3, PenTool, Image as ImageIcon, Sparkles, Move, ChevronLeft, ChevronRight, LayoutGrid, Maximize } from 'lucide-react'
+import { Settings2, Trash2, Eye, Download, RotateCw, Lock, Unlock, FileText, Type, SlidersHorizontal, X, FileImage, ShieldCheck, Layers, Scissors, Wand2, Hash, Edit3, PenTool, Image as ImageIcon, Sparkles, Move, ChevronLeft, ChevronRight, LayoutGrid, ZoomIn, ZoomOut } from 'lucide-react'
 import CustomDropdown from './CustomDropdown'
 
 // --- HELPER FUNCTION ---
@@ -28,21 +28,30 @@ interface SortableItemProps {
   rotation: number
   fineRotation: number
   scale: number
+  brightness: number
+  contrast: number
+  grayscale: boolean
+  cleanBackground: boolean
   onRemove: (id: string) => void
   onRotate: (id: string) => void
   onEdit: (id: string) => void
 }
 
-function SortablePageItem({ id, url, index, rotation, fineRotation, scale, onRemove, onRotate, onEdit }: SortableItemProps) {
-  const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id })
+function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brightness, contrast, grayscale, cleanBackground, onRemove, onRotate, onEdit }: SortableItemProps) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
   
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
+    zIndex: isDragging ? 50 : 1,
   }
 
   const isRotated = rotation % 180 !== 0
   const imageScale = isRotated ? 0.75 : 1
+
+  const g = grayscale ? 'grayscale(100%)' : ''
+  const cleanFx = cleanBackground ? 'contrast(150%) brightness(110%)' : ''
+  const filterStyle = `brightness(${brightness}%) contrast(${contrast}%) ${g} ${cleanFx}`.trim()
 
   return (
     <div 
@@ -50,36 +59,36 @@ function SortablePageItem({ id, url, index, rotation, fineRotation, scale, onRem
       style={style} 
       {...attributes} 
       {...listeners} 
-      className="relative rounded-lg overflow-hidden border border-slate-200 aspect-[3/4] cursor-grab active:cursor-grabbing hover:shadow-md transition-shadow bg-slate-100 flex items-center justify-center group"
+      className={`relative rounded-lg overflow-hidden border ${isDragging ? 'border-[#6384A3] shadow-2xl scale-105' : 'border-slate-200'} aspect-[3/4] cursor-grab active:cursor-grabbing hover:shadow-md transition-all bg-slate-100 flex items-center justify-center group touch-none`}
     >
       <div className="w-full h-full flex items-center justify-center overflow-hidden bg-white">
         <img 
           src={url} 
           alt={`Page ${index + 1}`} 
           className="max-w-full max-h-full object-contain pointer-events-none transition-transform" 
-          style={{ transform: `rotate(${rotation + fineRotation}deg) scale(${imageScale * scale})` }}
+          style={{ transform: `rotate(${rotation + fineRotation}deg) scale(${imageScale * scale})`, filter: filterStyle || 'none' }}
         />
       </div>
       
       <div className="absolute top-2 right-2 flex flex-col gap-2 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity z-10">
         <button 
           onPointerDown={(e) => { e.stopPropagation(); onRemove(id) }}
-          className="bg-red-500/90 hover:bg-red-600 text-white rounded-full w-7 h-7 lg:w-6 lg:h-6 flex items-center justify-center shadow-md transition-colors"
+          className="bg-red-500/90 hover:bg-red-600 text-white rounded-full w-8 h-8 lg:w-6 lg:h-6 flex items-center justify-center shadow-md transition-colors"
           title="Delete Page"
         >
           <X className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
         </button>
         <button 
           onPointerDown={(e) => { e.stopPropagation(); onRotate(id) }}
-          className="bg-slate-800/90 hover:bg-black text-white rounded-full w-7 h-7 lg:w-6 lg:h-6 flex items-center justify-center shadow-md transition-colors"
+          className="bg-slate-800/90 hover:bg-black text-white rounded-full w-8 h-8 lg:w-6 lg:h-6 flex items-center justify-center shadow-md transition-colors"
           title="Rotate 90°"
         >
           <RotateCw className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
         </button>
         <button 
           onPointerDown={(e) => { e.stopPropagation(); onEdit(id) }}
-          className="bg-[#6384A3]/90 hover:bg-[#4f6a83] text-white rounded-full w-7 h-7 lg:w-6 lg:h-6 flex items-center justify-center shadow-md transition-colors"
-          title="Straighten & Crop Page"
+          className="bg-[#6384A3]/90 hover:bg-[#4f6a83] text-white rounded-full w-8 h-8 lg:w-6 lg:h-6 flex items-center justify-center shadow-md transition-colors"
+          title="Edit Page (Enhance & Straighten)"
         >
           <Edit3 className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
         </button>
@@ -87,14 +96,25 @@ function SortablePageItem({ id, url, index, rotation, fineRotation, scale, onRem
 
       <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-2 py-0.5 rounded font-bold shadow-sm flex items-center gap-1">
         {index + 1}
-        {(fineRotation !== 0 || scale !== 1) && <span className="text-[#6384A3] ml-1">Edited</span>}
+        {(fineRotation !== 0 || scale !== 1 || brightness !== 100 || grayscale || cleanBackground) && <span className="text-[#6384A3] ml-1">Edited</span>}
       </div>
     </div>
   )
 }
 
 // --- MAIN COMPONENT ---
-type PageItem = { id: string; url: string; isLossless: boolean; rotation: number; fineRotation: number; scale: number }
+type PageItem = { 
+  id: string; 
+  url: string; 
+  isLossless: boolean; 
+  rotation: number; 
+  fineRotation: number; 
+  scale: number;
+  brightness: number;
+  contrast: number;
+  grayscale: boolean;
+  cleanBackground: boolean;
+}
 
 type SigPlacement = { x: number, y: number, scale: number, opacity: number }
 
@@ -118,8 +138,8 @@ export default function PdfEditor() {
   
   const [originalDocName, setOriginalDocName] = useState('document')
 
-  // Expanded Accordion State (Export is open by default)
-  const [activePanel, setActivePanel] = useState<'security' | 'overlays' | 'compression' | 'merge' | 'split' | 'enhance' | 'signature' | 'resize' | 'export' | null>('export')
+  // Expanded Accordion State
+  const [activePanel, setActivePanel] = useState<'security' | 'overlays' | 'compression' | 'merge' | 'split' | 'enhance' | 'signature' | 'export' | null>('export')
   
   // Ref for Smooth Scrolling Focus
   const panelRefs = useRef<Record<string, HTMLDivElement | null>>({})
@@ -160,15 +180,14 @@ export default function PdfEditor() {
   
   const [previewPageIndex, setPreviewPageIndex] = useState(0)
   const [showViewerGrid, setShowViewerGrid] = useState(false)
+  const [sigZoom, setSigZoom] = useState(1)
+
+  // Live Signature Pre-Render State
+  const [sigPreviewUrl, setSigPreviewUrl] = useState<string | null>(null)
+  const [isGeneratingSigPreview, setIsGeneratingSigPreview] = useState(false)
 
   const rightSideSigRef = useRef<HTMLDivElement>(null)
   const modalSigRef = useRef<HTMLDivElement>(null)
-
-  // Resizing State
-  const [resizeWidth, setResizeWidth] = useState<number | ''>('')
-  const [resizeHeight, setResizeHeight] = useState<number | ''>('')
-  const [maintainRatio, setMaintainRatio] = useState(true)
-  const [presetSize, setPresetSize] = useState('custom')
 
   // Compression & Export State
   const [enableCompression, setEnableCompression] = useState(false)
@@ -182,10 +201,18 @@ export default function PdfEditor() {
 
   const [exportFormat, setExportFormat] = useState('pdf')
 
-  // Straighten & Scale Modal State
+  // Straighten, Scale & Enhance Modal State
   const [editingPageId, setEditingPageId] = useState<string | null>(null)
 
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
+  // -- GUARANTEED SAFE DERIVED STATES AT TOP LEVEL --
+  const editingPageData = editingPageId ? pages.find(p => p.id === editingPageId) : null
+  const sigPageTarget = pages.length > 0 ? (pages[previewPageIndex] || pages[0]) : null
+
+  // Advanced Mobile-Friendly Sensors
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } })
+  )
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -203,6 +230,25 @@ export default function PdfEditor() {
       setPreviewPageIndex(pages.length - 1)
     }
   }, [pages.length, previewPageIndex])
+
+  // --- SIGNATURE PRE-RENDER LOGIC ---
+  useEffect(() => {
+    let isMounted = true;
+    if ((showSigModal || activePanel === 'signature') && pages.length > 0) {
+      const target = pages[previewPageIndex];
+      if (target) {
+        setIsGeneratingSigPreview(true);
+        // Render the page WITH all local enhancements, but WITHOUT the signature
+        renderPageToCanvas(target, previewPageIndex, false, true).then(canvas => {
+          if (canvas && isMounted) {
+            setSigPreviewUrl(canvas.toDataURL('image/jpeg', 0.85));
+          }
+          if (isMounted) setIsGeneratingSigPreview(false);
+        });
+      }
+    }
+    return () => { isMounted = false; }
+  }, [showSigModal, activePanel, previewPageIndex, pages, cleanWatermarks, enableCompression, compressionGrayscale]);
 
   // --- SIGNATURE HELPERS ---
   const getSigPlacement = useCallback((index: number) => {
@@ -289,7 +335,11 @@ export default function PdfEditor() {
               isLossless: true,
               rotation: 0,
               fineRotation: 0,
-              scale: 1
+              scale: 1,
+              brightness: 100,
+              contrast: 100,
+              grayscale: false,
+              cleanBackground: false
             })
           }
         } else if (file.type.startsWith('image/')) {
@@ -300,7 +350,11 @@ export default function PdfEditor() {
             isLossless: file.type === 'image/png' || file.type === 'image/webp',
             rotation: 0,
             fineRotation: 0,
-            scale: 1
+            scale: 1,
+            brightness: 100,
+            contrast: 100,
+            grayscale: false,
+            cleanBackground: false
           })
         }
       }
@@ -335,11 +389,8 @@ export default function PdfEditor() {
   const rotatePage = (idToRotate: string) => {
     setPages(items => items.map(item => item.id === idToRotate ? { ...item, rotation: (item.rotation + 90) % 360 } : item))
   }
-  const updateFineRotation = (id: string, deg: number) => {
-    setPages(items => items.map(item => item.id === id ? { ...item, fineRotation: deg } : item))
-  }
-  const updateScale = (id: string, scale: number) => {
-    setPages(items => items.map(item => item.id === id ? { ...item, scale: scale } : item))
+  const updatePageAttributes = (id: string, updates: Partial<PageItem>) => {
+    setPages(items => items.map(item => item.id === id ? { ...item, ...updates } : item))
   }
   const clearAll = () => {
     setPages([])
@@ -387,19 +438,6 @@ export default function PdfEditor() {
     } finally {
       setIsProcessing(false)
       setLoadingText('')
-    }
-  }
-
-  const handlePresetChange = (val: string) => {
-    setPresetSize(val)
-    if (val !== 'custom') {
-      const [w, h] = val.split('x').map(Number)
-      setResizeWidth(w)
-      setResizeHeight(h)
-      setMaintainRatio(false) 
-    } else {
-      setResizeWidth('')
-      setResizeHeight('')
     }
   }
 
@@ -474,10 +512,10 @@ export default function PdfEditor() {
           
           <div className={`absolute inset-0 border-2 border-dashed ${(isDraggingSig || resizingState) && draggingContext === ctx ? 'border-blue-500 bg-blue-500/10' : 'border-transparent group-hover:border-slate-300'} rounded pointer-events-none transition-colors`} />
           
-          <div className="absolute -top-2 -left-2 w-4 h-4 bg-white border-2 border-blue-500 rounded-full cursor-nwse-resize pointer-events-auto opacity-0 group-hover:opacity-100 transition-opacity" onPointerDown={(e) => handleResizeDown(e, 'tl', ctx)} />
-          <div className="absolute -top-2 -right-2 w-4 h-4 bg-white border-2 border-blue-500 rounded-full cursor-nesw-resize pointer-events-auto opacity-0 group-hover:opacity-100 transition-opacity" onPointerDown={(e) => handleResizeDown(e, 'tr', ctx)} />
-          <div className="absolute -bottom-2 -left-2 w-4 h-4 bg-white border-2 border-blue-500 rounded-full cursor-nesw-resize pointer-events-auto opacity-0 group-hover:opacity-100 transition-opacity" onPointerDown={(e) => handleResizeDown(e, 'bl', ctx)} />
-          <div className="absolute -bottom-2 -right-2 w-4 h-4 bg-white border-2 border-blue-500 rounded-full cursor-nwse-resize pointer-events-auto opacity-0 group-hover:opacity-100 transition-opacity" onPointerDown={(e) => handleResizeDown(e, 'br', ctx)} />
+          <div className="absolute -top-3 -left-3 w-6 h-6 lg:w-4 lg:h-4 bg-white border-2 border-blue-500 rounded-full cursor-nwse-resize pointer-events-auto opacity-100 lg:opacity-0 group-hover:opacity-100 transition-opacity" onPointerDown={(e) => handleResizeDown(e, 'tl', ctx)} />
+          <div className="absolute -top-3 -right-3 w-6 h-6 lg:w-4 lg:h-4 bg-white border-2 border-blue-500 rounded-full cursor-nesw-resize pointer-events-auto opacity-100 lg:opacity-0 group-hover:opacity-100 transition-opacity" onPointerDown={(e) => handleResizeDown(e, 'tr', ctx)} />
+          <div className="absolute -bottom-3 -left-3 w-6 h-6 lg:w-4 lg:h-4 bg-white border-2 border-blue-500 rounded-full cursor-nesw-resize pointer-events-auto opacity-100 lg:opacity-0 group-hover:opacity-100 transition-opacity" onPointerDown={(e) => handleResizeDown(e, 'bl', ctx)} />
+          <div className="absolute -bottom-3 -right-3 w-6 h-6 lg:w-4 lg:h-4 bg-white border-2 border-blue-500 rounded-full cursor-nwse-resize pointer-events-auto opacity-100 lg:opacity-0 group-hover:opacity-100 transition-opacity" onPointerDown={(e) => handleResizeDown(e, 'br', ctx)} />
         </div>
       </div>
     )
@@ -508,7 +546,7 @@ export default function PdfEditor() {
           PAGE {previewPageIndex + 1} OF {pages.length}
         </span>
         <button 
-          onClick={(e) => { e.stopPropagation(); setPreviewPageIndex(p => Math.min(pages.length - 1, p + 1)) }} 
+          onClick={(e) => { e.stopPropagation(); setPreviewPageIndex(p => Math.max(pages.length - 1, p + 1)) }} 
           disabled={previewPageIndex === pages.length - 1 || showViewerGrid} 
           className="p-1 rounded-full hover:bg-slate-200 disabled:opacity-50 transition-colors"
         >
@@ -575,6 +613,7 @@ export default function PdfEditor() {
           </div>
         )}
 
+        {/* Universal Sig Controls */}
         <div className="space-y-3 pt-2 border-t border-slate-100">
           <div className="space-y-1">
             <div className="flex justify-between text-[9px] font-bold text-slate-500 uppercase tracking-widest">
@@ -621,35 +660,7 @@ export default function PdfEditor() {
     )
   }
 
-  // Calculate generic target dimensions
-  const calculateTargetDimensions = (origW: number, origH: number) => {
-    let targetWidth = origW;
-    let targetHeight = origH;
-    const rw = typeof resizeWidth === 'number' ? resizeWidth : null;
-    const rh = typeof resizeHeight === 'number' ? resizeHeight : null;
-    
-    if (rw || rh) {
-      if (maintainRatio) {
-        if (rw && rh) {
-          const ratio = Math.min(rw / origW, rh / origH);
-          targetWidth = Math.max(1, Math.round(origW * ratio));
-          targetHeight = Math.max(1, Math.round(origH * ratio));
-        } else if (rw) {
-          targetWidth = rw;
-          targetHeight = Math.max(1, Math.round((origH * rw) / origW));
-        } else if (rh) {
-          targetHeight = rh;
-          targetWidth = Math.max(1, Math.round((origW * rh) / origH));
-        }
-      } else {
-        targetWidth = rw || origW;
-        targetHeight = rh || origH;
-      }
-    }
-    return { targetWidth, targetHeight };
-  }
-
-  const renderPageToCanvas = async (page: PageItem, index: number, forPdf = false) => {
+  const renderPageToCanvas = async (page: PageItem, index: number, forPdf = false, skipSignature = false) => {
     const img = await createImage(page.url)
     const canvas = document.createElement('canvas')
     const ctx = canvas.getContext('2d')
@@ -659,8 +670,9 @@ export default function PdfEditor() {
     const rawWidth = isRotated ? img.height : img.width
     const rawHeight = isRotated ? img.width : img.height
 
-    const { targetWidth, targetHeight } = calculateTargetDimensions(rawWidth, rawHeight)
-    
+    let targetWidth = rawWidth
+    let targetHeight = rawHeight
+
     let scaleRatio = 1
     if (forPdf && enableCompression) {
       const activePPI = ppiMode === 'custom' ? customPPI : Number(ppiMode)
@@ -682,15 +694,21 @@ export default function PdfEditor() {
     ctx.translate(canvas.width / 2, canvas.height / 2)
     ctx.rotate(((page.rotation + page.fineRotation) * Math.PI) / 180)
     
-    const scaleX = (targetWidth / rawWidth) * scaleRatio * (page.scale || 1)
-    const scaleY = (targetHeight / rawHeight) * scaleRatio * (page.scale || 1)
+    // Apply local page filters (Brightness, Contrast, Grayscale)
+    const b = page.brightness ?? 100
+    const c = page.contrast ?? 100
+    ctx.filter = `brightness(${b}%) contrast(${c}%) ${page.grayscale ? 'grayscale(100%)' : ''}`
+
+    const scaleX = scaleRatio * (page.scale || 1)
+    const scaleY = scaleRatio * (page.scale || 1)
     ctx.scale(scaleX, scaleY)
     
     ctx.drawImage(img, -img.width / 2, -img.height / 2, img.width, img.height)
     ctx.setTransform(1, 0, 0, 1, 0, 0)
+    ctx.filter = 'none'
 
-    // Clean Scan
-    if (cleanWatermarks) {
+    // Clean Scan (Thresholding)
+    if (cleanWatermarks || page.cleanBackground) {
       const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
       const data = imgData.data
       for (let j = 0; j < data.length; j += 4) {
@@ -705,7 +723,7 @@ export default function PdfEditor() {
       ctx.putImageData(imgData, 0, 0)
     }
 
-    // Grayscale
+    // Global Grayscale Compression Override
     if (forPdf && enableCompression && compressionGrayscale) {
       const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
       const data = imgData.data
@@ -719,7 +737,7 @@ export default function PdfEditor() {
     }
 
     // Signature
-    if (signature.enabled && shouldApplySignature(index, signature.applyMode, signature.customPages)) {
+    if (!skipSignature && signature.enabled && shouldApplySignature(index, signature.applyMode, signature.customPages)) {
       const placement = getSigPlacement(index)
       ctx.save()
       ctx.globalAlpha = placement.opacity / 100
@@ -966,10 +984,6 @@ export default function PdfEditor() {
     }
   }
 
-  const editingPageData = editingPageId ? pages.find(p => p.id === editingPageId) : null
-  const sigPageTarget = pages.length > 0 ? (pages[previewPageIndex] || pages[0]) : null
-  const appliesToCurrent = shouldApplySignature(previewPageIndex, signature.applyMode, signature.customPages)
-
   return (
     <>
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col lg:flex-row h-auto lg:h-[650px] min-h-[650px]">
@@ -1050,7 +1064,7 @@ export default function PdfEditor() {
             {/* Enhance & Clean Accordion */}
             <div ref={(el) => { panelRefs.current['enhance'] = el; }} className={`border border-slate-200 flex-shrink-0 bg-white shadow-sm transition-all relative ${activePanel === 'enhance' ? 'rounded-lg z-20' : 'rounded-lg z-0 overflow-hidden'}`}>
               <button onClick={() => setActivePanel(activePanel === 'enhance' ? null : 'enhance')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activePanel === 'enhance' ? 'rounded-t-lg' : 'rounded-lg'}`}>
-                <Wand2 className="w-4 h-4 text-[#6384A3]" /> Scan Cleaner
+                <Wand2 className="w-4 h-4 text-[#6384A3]" /> Scan Cleaner (Global)
               </button>
               {activePanel === 'enhance' && (
                 <div className="p-4 space-y-4 border-t border-slate-100 rounded-b-lg">
@@ -1058,9 +1072,10 @@ export default function PdfEditor() {
                     <input type="checkbox" checked={cleanWatermarks} onChange={(e) => setCleanWatermarks(e.target.checked)} className="w-4 h-4 mt-0.5 accent-[#6384A3] rounded" />
                     <div>
                       <span className="uppercase tracking-wider">Remove Faint Watermarks</span>
-                      <p className="text-[9px] text-slate-400 font-normal mt-1 leading-tight">Washes out light colors, shadows, and faint watermarks while preserving dark text for scanned documents.</p>
+                      <p className="text-[9px] text-slate-400 font-normal mt-1 leading-tight">Washes out light colors, shadows, and faint watermarks while preserving dark text for scanned documents globally.</p>
                     </div>
                   </label>
+                  <p className="text-[10px] text-[#6384A3] font-bold mt-2 pt-2 border-t border-slate-100">Pro Tip: Click the Edit icon on a specific page thumbnail for local enhancements.</p>
                 </div>
               )}
             </div>
@@ -1124,63 +1139,6 @@ export default function PdfEditor() {
                       <span className="text-[#6384A3]">{watermarkOpacity}%</span>
                     </div>
                     <input type="range" min="10" max="100" value={watermarkOpacity} onChange={(e) => setWatermarkOpacity(Number(e.target.value))} className="w-full accent-[#6384A3]" />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Resize Dimensions Accordion */}
-            <div ref={(el) => { panelRefs.current['resize'] = el; }} className={`border border-slate-200 flex-shrink-0 bg-white shadow-sm transition-all relative ${activePanel === 'resize' ? 'rounded-lg z-20' : 'rounded-lg z-0 overflow-hidden'}`}>
-              <button onClick={() => setActivePanel(activePanel === 'resize' ? null : 'resize')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activePanel === 'resize' ? 'rounded-t-lg' : 'rounded-lg'}`}>
-                <Maximize className="w-4 h-4 text-[#6384A3]" /> Resize Dimensions
-              </button>
-              {activePanel === 'resize' && (
-                <div className="p-4 bg-white border-t border-slate-100 space-y-4 rounded-b-lg">
-                  <div className="space-y-3">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Output Dimensions</label>
-                    <CustomDropdown 
-                      value={presetSize} 
-                      onChange={handlePresetChange} 
-                      direction="up"
-                      options={[
-                        { value: 'custom', label: 'Original / Custom Size' },
-                        { value: '472x591', label: 'BD Passport (472x591 px)' },
-                        { value: '236x295', label: 'BD Stamp Size (236x295 px)' },
-                        { value: '1920x1080', label: 'Full HD (1920x1080 px)' },
-                        { value: '1080x1080', label: 'Instagram Square (1080x1080 px)' },
-                      ]}
-                    />
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Width (px)</label>
-                        <input 
-                          type="number" 
-                          placeholder="Auto" 
-                          value={resizeWidth} 
-                          onChange={(e) => { setResizeWidth(e.target.value ? Number(e.target.value) : ''); setPresetSize('custom'); }} 
-                          className="w-full p-2 border border-slate-200 rounded text-sm bg-white" 
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Height (px)</label>
-                        <input 
-                          type="number" 
-                          placeholder="Auto" 
-                          value={resizeHeight} 
-                          onChange={(e) => { setResizeHeight(e.target.value ? Number(e.target.value) : ''); setPresetSize('custom'); }} 
-                          className="w-full p-2 border border-slate-200 rounded text-sm bg-white" 
-                        />
-                      </div>
-                    </div>
-                    <label className="flex items-center gap-2 mt-2 text-[10px] font-bold text-slate-600 cursor-pointer uppercase tracking-widest">
-                      <input 
-                        type="checkbox" 
-                        checked={maintainRatio} 
-                        onChange={(e) => setMaintainRatio(e.target.checked)} 
-                        className="w-3.5 h-3.5 accent-[#6384A3] rounded cursor-pointer" 
-                      />
-                      Maintain Ratio (Fit Inside)
-                    </label>
                   </div>
                 </div>
               )}
@@ -1253,7 +1211,7 @@ export default function PdfEditor() {
                       <p className="text-[9px] text-slate-400 leading-tight">These settings apply to PDF exports to significantly reduce file size.</p>
                     </div>
                   ) : (
-                    <p className="text-[10px] text-slate-500">Currently exporting visually lossless or original quality files.</p>
+                    <p className="text-[10px] text-slate-500">Currently exporting visually lossless JPEGs for optimal quality/size balance.</p>
                   )}
                 </div>
               )}
@@ -1343,27 +1301,39 @@ export default function PdfEditor() {
                 ) : (
                   <div
                     ref={rightSideSigRef}
-                    className="relative shadow-lg bg-white touch-none flex max-w-full max-h-full items-center justify-center"
+                    className="relative shadow-lg bg-white touch-none inline-block max-w-full max-h-full"
                     onPointerDown={() => handlePointerDownSig('right')}
                     onPointerMove={handlePointerMoveSig}
                     onPointerUp={handlePointerUpSig}
                     onPointerLeave={handlePointerUpSig}
                   >
-                    <img
-                      src={sigPageTarget.url}
-                      className="max-w-full max-h-full block pointer-events-none object-contain"
-                      style={{ transform: `rotate(${sigPageTarget.rotation + sigPageTarget.fineRotation}deg) scale(${sigPageTarget.scale || 1})` }}
-                      alt="Placement Target"
-                      draggable={false}
-                    />
-                    {renderSignatureOverlay('right')}
+                    {isGeneratingSigPreview ? (
+                      <div className="flex flex-col items-center justify-center h-[50vh] w-[30vh] text-slate-400">
+                         <svg className="animate-spin w-8 h-8 text-[#6384A3] mb-4" fill="none" viewBox="0 0 24 24">
+                           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                         </svg>
+                         <span className="text-[10px] uppercase tracking-widest font-bold">Rendering View...</span>
+                      </div>
+                    ) : sigPreviewUrl ? (
+                      <>
+                        <img 
+                          src={sigPreviewUrl} 
+                          className="block pointer-events-none" 
+                          style={{ maxWidth: '100%', maxHeight: '65vh', width: 'auto', height: 'auto' }}
+                          alt="Placement Target" 
+                          draggable={false}
+                        />
+                        {renderSignatureOverlay('right')}
+                      </>
+                    ) : null}
                   </div>
                 )}
               </div>
             </div>
           ) : (
             // DND Page Grid View
-            <div className="flex-1 overflow-y-auto pr-2 animate-in fade-in">
+            <div className="flex-1 overflow-y-auto pr-2 animate-in fade-in touch-none">
               <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
                 <SortableContext items={pages.map(p => p.id)} strategy={rectSortingStrategy}>
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 lg:gap-6 pb-6">
@@ -1376,6 +1346,10 @@ export default function PdfEditor() {
                         rotation={page.rotation}
                         fineRotation={page.fineRotation || 0}
                         scale={page.scale || 1}
+                        brightness={page.brightness}
+                        contrast={page.contrast}
+                        grayscale={page.grayscale}
+                        cleanBackground={page.cleanBackground}
                         onRemove={removePage} 
                         onRotate={rotatePage}
                         onEdit={setEditingPageId}
@@ -1431,9 +1405,16 @@ export default function PdfEditor() {
           {/* Draggable Viewport in Modal */}
           <div className="flex-1 relative touch-none select-none bg-slate-900 overflow-hidden flex flex-col">
              
+             {/* Zoom Controls Overlay */}
+             <div className="absolute top-4 right-4 z-50 flex gap-1 bg-slate-800/90 p-1.5 rounded-lg backdrop-blur border border-slate-700 shadow-xl">
+               <button onClick={() => setSigZoom(z => Math.max(0.25, z - 0.25))} className="p-2 bg-slate-700 text-white rounded hover:bg-slate-600 transition-colors"><ZoomOut className="w-4 h-4"/></button>
+               <div className="flex items-center justify-center px-3 min-w-[4rem] text-xs font-bold text-slate-300 tracking-widest">{Math.round(sigZoom * 100)}%</div>
+               <button onClick={() => setSigZoom(z => Math.min(4, z + 0.25))} className="p-2 bg-slate-700 text-white rounded hover:bg-slate-600 transition-colors"><ZoomIn className="w-4 h-4"/></button>
+             </div>
+
              {renderPaginationOverlay()}
 
-             <div className="flex-1 overflow-hidden relative w-full h-full z-10 flex items-center justify-center p-8">
+             <div className="flex-1 overflow-auto relative w-full h-full z-10 p-4 md:p-8 flex custom-scrollbar">
                {showViewerGrid ? (
                  <div className="absolute inset-0 z-40 bg-slate-900/95 overflow-y-auto p-4 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 animate-in fade-in">
                    {pages.map((p, idx) => (
@@ -1447,23 +1428,36 @@ export default function PdfEditor() {
                    ))}
                  </div>
                ) : (
-                 <div 
-                   ref={modalSigRef}
-                   className="relative shadow-2xl bg-white touch-none flex max-w-full max-h-full items-center justify-center"
-                   onPointerDown={() => handlePointerDownSig('modal')}
-                   onPointerMove={handlePointerMoveSig}
-                   onPointerUp={handlePointerUpSig}
-                   onPointerLeave={handlePointerUpSig}
-                 >
-                   <img 
-                     src={sigPageTarget.url} 
-                     className="max-w-full max-h-full block pointer-events-none object-contain" 
-                     style={{ transform: `rotate(${sigPageTarget.rotation + sigPageTarget.fineRotation}deg) scale(${sigPageTarget.scale || 1})` }}
-                     alt="Placement Target" 
-                     draggable={false}
-                   />
-                   
-                   {renderSignatureOverlay('modal')}
+                 <div className="m-auto flex items-center justify-center min-w-max min-h-max transition-all">
+                   <div 
+                     ref={modalSigRef}
+                     className="relative shadow-2xl bg-white touch-none inline-block"
+                     onPointerDown={() => handlePointerDownSig('modal')}
+                     onPointerMove={handlePointerMoveSig}
+                     onPointerUp={handlePointerUpSig}
+                     onPointerLeave={handlePointerUpSig}
+                   >
+                     {isGeneratingSigPreview ? (
+                       <div className="flex flex-col items-center justify-center h-[70vh] w-[50vh] text-slate-400">
+                          <svg className="animate-spin w-8 h-8 text-[#6384A3] mb-4" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          <span className="text-[10px] uppercase tracking-widest font-bold">Rendering View...</span>
+                       </div>
+                     ) : sigPreviewUrl ? (
+                       <>
+                         <img 
+                           src={sigPreviewUrl} 
+                           className="block pointer-events-none" 
+                           style={{ height: `${75 * sigZoom}vh`, width: 'auto', maxWidth: 'none' }}
+                           alt="Placement Target" 
+                           draggable={false}
+                         />
+                         {renderSignatureOverlay('modal')}
+                       </>
+                     ) : null}
+                   </div>
                  </div>
                )}
              </div>
@@ -1471,13 +1465,13 @@ export default function PdfEditor() {
         </div>
       )}
 
-      {/* Editing Modal (Fine Straighten & Scale Tool) */}
+      {/* Editing Modal (Page Specific Enhancements) */}
       {editingPageData && (
         <div className="fixed inset-0 z-[150] bg-slate-900/90 flex flex-col items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
             <div className="flex justify-between items-center p-4 border-b border-slate-200">
               <h3 className="text-sm font-bold text-slate-800 uppercase tracking-widest flex items-center gap-2">
-                <Edit3 className="w-4 h-4 text-[#6384A3]" /> Straighten & Crop
+                <Edit3 className="w-4 h-4 text-[#6384A3]" /> Edit Page {pages.findIndex(p => p.id === editingPageData.id) + 1}
               </h3>
               <button onClick={() => setEditingPageId(null)} className="text-slate-400 hover:text-red-500 transition-colors">
                 <X className="w-5 h-5" />
@@ -1485,17 +1479,20 @@ export default function PdfEditor() {
             </div>
             
             {/* Precision Viewport Canvas */}
-            <div className="p-4 sm:p-6 bg-slate-800 flex items-center justify-center relative overflow-hidden" style={{ minHeight: '350px' }}>
+            <div className="p-4 sm:p-6 bg-slate-800 flex items-center justify-center relative overflow-hidden" style={{ minHeight: '300px' }}>
               <div className="absolute inset-0 pointer-events-none opacity-10" style={{ backgroundImage: 'linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
               
               <div className="relative inline-block border-2 border-transparent overflow-visible shadow-2xl">
-                <img src={editingPageData.url} className="max-h-[40vh] sm:max-h-[45vh] opacity-0 pointer-events-none" alt="" />
+                <img src={editingPageData.url} className="max-h-[35vh] sm:max-h-[40vh] opacity-0 pointer-events-none" alt="" />
                 
-                <div className="absolute inset-0 flex items-center justify-center overflow-visible">
+                <div className="absolute inset-0 flex items-center justify-center overflow-visible bg-white">
                    <img 
                      src={editingPageData.url} 
                      className="w-full h-full object-contain max-w-none max-h-none pointer-events-none" 
-                     style={{ transform: `rotate(${editingPageData.rotation + editingPageData.fineRotation}deg) scale(${editingPageData.scale || 1})` }} 
+                     style={{ 
+                       transform: `rotate(${editingPageData.rotation + editingPageData.fineRotation}deg) scale(${editingPageData.scale || 1})`,
+                       filter: `brightness(${editingPageData.brightness}%) contrast(${editingPageData.contrast}%) ${editingPageData.grayscale ? 'grayscale(100%)' : ''} ${editingPageData.cleanBackground ? 'contrast(150%) brightness(110%)' : ''}`.trim()
+                     }} 
                      alt="Editing preview"
                    />
                 </div>
@@ -1509,41 +1506,69 @@ export default function PdfEditor() {
               </div>
             </div>
             
-            <div className="p-6 space-y-5 bg-white border-t border-slate-200">
-              <div className="space-y-2">
-                <div className="flex justify-between text-xs font-bold text-slate-600 uppercase tracking-widest">
-                  <span>Fine Rotation Angle</span>
-                  <span className="text-[#6384A3]">{editingPageData.fineRotation}°</span>
+            <div className="p-6 space-y-5 bg-white border-t border-slate-200 overflow-y-auto">
+              
+              <div className="grid grid-cols-2 gap-6 pb-2">
+                <div className="space-y-2">
+                  <div className="flex justify-between text-[10px] font-bold text-slate-600 uppercase tracking-widest">
+                    <span>Rotation</span>
+                    <span className="text-[#6384A3]">{editingPageData.fineRotation}°</span>
+                  </div>
+                  <input 
+                    type="range" 
+                    min="-45" 
+                    max="45" 
+                    step="0.5" 
+                    value={editingPageData.fineRotation} 
+                    onChange={(e) => updatePageAttributes(editingPageData.id, { fineRotation: Number(e.target.value) })} 
+                    className="w-full accent-[#6384A3]" 
+                  />
                 </div>
-                <input 
-                  type="range" 
-                  min="-45" 
-                  max="45" 
-                  step="0.5" 
-                  value={editingPageData.fineRotation} 
-                  onChange={(e) => updateFineRotation(editingPageData.id, Number(e.target.value))} 
-                  className="w-full accent-[#6384A3]" 
-                />
+
+                <div className="space-y-2">
+                  <div className="flex justify-between text-[10px] font-bold text-slate-600 uppercase tracking-widest">
+                    <span>Zoom</span>
+                    <span className="text-[#6384A3]">{(editingPageData.scale || 1).toFixed(2)}x</span>
+                  </div>
+                  <input 
+                    type="range" 
+                    min="0.5" 
+                    max="3" 
+                    step="0.05" 
+                    value={editingPageData.scale || 1} 
+                    onChange={(e) => updatePageAttributes(editingPageData.id, { scale: Number(e.target.value) })} 
+                    className="w-full accent-[#6384A3]" 
+                  />
+                </div>
               </div>
 
-              <div className="space-y-2">
-                <div className="flex justify-between text-xs font-bold text-slate-600 uppercase tracking-widest">
-                  <span>Zoom / Scale</span>
-                  <span className="text-[#6384A3]">{(editingPageData.scale || 1).toFixed(2)}x</span>
+              <div className="pt-3 border-t border-slate-100">
+                <h4 className="text-[10px] font-bold text-slate-800 uppercase tracking-widest mb-3">Enhancements (This Page)</h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Brightness</label>
+                    <input type="range" min="50" max="150" value={editingPageData.brightness} onChange={(e) => updatePageAttributes(editingPageData.id, { brightness: Number(e.target.value) })} className="w-full accent-[#6384A3]" />
+                  </div>
+                  <div>
+                    <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Contrast</label>
+                    <input type="range" min="50" max="150" value={editingPageData.contrast} onChange={(e) => updatePageAttributes(editingPageData.id, { contrast: Number(e.target.value) })} className="w-full accent-[#6384A3]" />
+                  </div>
                 </div>
-                <input 
-                  type="range" 
-                  min="0.5" 
-                  max="3" 
-                  step="0.05" 
-                  value={editingPageData.scale || 1} 
-                  onChange={(e) => updateScale(editingPageData.id, Number(e.target.value))} 
-                  className="w-full accent-[#6384A3]" 
-                />
+                
+                <div className="flex flex-col gap-2 mt-4">
+                  <label className="flex items-center gap-2 text-[10px] font-bold text-slate-700 uppercase tracking-widest cursor-pointer">
+                    <input type="checkbox" checked={editingPageData.grayscale} onChange={(e) => updatePageAttributes(editingPageData.id, { grayscale: e.target.checked })} className="w-3.5 h-3.5 accent-[#6384A3] rounded" />
+                    Black & White (Grayscale)
+                  </label>
+                  <label className="flex items-center gap-2 text-[10px] font-bold text-slate-700 uppercase tracking-widest cursor-pointer">
+                    <input type="checkbox" checked={editingPageData.cleanBackground} onChange={(e) => updatePageAttributes(editingPageData.id, { cleanBackground: e.target.checked })} className="w-3.5 h-3.5 accent-[#6384A3] rounded" />
+                    Clean Scan Background (Wash Faint Colors)
+                  </label>
+                </div>
               </div>
 
               <div className="flex gap-2 pt-2 border-t border-slate-100">
-                <button onClick={() => { updateFineRotation(editingPageData.id, 0); updateScale(editingPageData.id, 1); }} className="flex-[0.5] py-2.5 px-4 text-xs font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50 uppercase tracking-widest">Reset</button>
+                <button onClick={() => updatePageAttributes(editingPageData.id, { fineRotation: 0, scale: 1, brightness: 100, contrast: 100, grayscale: false, cleanBackground: false })} className="flex-[0.5] py-2.5 px-4 text-xs font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50 uppercase tracking-widest">Reset</button>
                 <button onClick={() => setEditingPageId(null)} className="flex-1 py-2.5 text-xs font-bold text-white bg-[#6384A3] rounded hover:bg-[#4f6a83] uppercase tracking-widest">Done</button>
               </div>
             </div>

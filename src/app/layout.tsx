@@ -36,6 +36,7 @@ export default function RootLayout({
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
       {/* overscroll-none prevents the rubber-band "pull-to-refresh" bounce on mobile browsers */}
       <body className="min-h-full flex flex-col overscroll-none bg-slate-50 text-slate-900 selection:bg-[#6384A3] selection:text-white">
