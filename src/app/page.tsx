@@ -50,7 +50,18 @@ export default function Home() {
           <div className="px-2">
             <h1 className="text-2xl sm:text-3xl font-light tracking-widest text-slate-700">ZS CONVERTER</h1>
             <p className="text-xs sm:text-sm text-slate-500 max-w-lg mx-auto mt-2">
-              A fast, private, browser-based toolkit. Developed by Zulkarnain Saurav (+8801615201545)
+              A fast, private, browser-based toolkit. Developed by Zulkarnain Saurav{' '}
+              <a 
+                href="mailto:zulkarnain.saurav@gmail.com" 
+                title="zulkarnain.saurav@gmail.com"
+                className="inline-flex items-center align-middle hover:text-slate-800 transition-colors mx-1"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect width="20" height="16" x="2" y="4" rx="2" />
+                  <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" />
+                </svg>
+              </a>
+              (+8801615201545)
             </p>
           </div>
 
@@ -90,7 +101,7 @@ export default function Home() {
                 onClick={() => setAppMode('ai')} 
                 className={`flex-shrink-0 px-4 py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'ai' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
               >
-                AI Converter
+                AI File Converter
               </button>
               <button 
                 onClick={() => setAppMode('palette')} 
