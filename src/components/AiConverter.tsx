@@ -6,7 +6,7 @@ import * as pdfjsLib from 'pdfjs-dist'
 import { jsPDF } from 'jspdf'
 import { writePsdBuffer } from 'ag-psd'
 import * as UTIF from 'utif'
-import { Settings2, Download, UploadCloud, X, FileType2 } from 'lucide-react'
+import { Settings2, Download, X, FileType2 } from 'lucide-react'
 import CustomDropdown from './CustomDropdown'
 
 export default function AiConverter() {
@@ -40,7 +40,9 @@ export default function AiConverter() {
 
       canvas.width = viewport.width
       canvas.height = viewport.height
-      await page.render({ canvasContext: ctx, viewport }).promise
+      
+      // Bypass volatile pdfjs-dist TypeScript definitions with as any
+      await page.render({ canvasContext: ctx, viewport } as any).promise
       
       canvasRef.current = canvas
       setPreviewUrl(canvas.toDataURL('image/png'))
@@ -98,14 +100,15 @@ export default function AiConverter() {
         downloadUrl = URL.createObjectURL(new Blob([svgStr], { type: 'image/svg+xml' }))
       } 
       else if (exportFormat === 'psd') {
-        // Native browser canvas is explicitly supported here
         const buffer = writePsdBuffer({ width: canvas.width, height: canvas.height, children: [{ name: 'AI Layer', canvas }] })
-        downloadUrl = URL.createObjectURL(new Blob([buffer], { type: 'application/octet-stream' }))
+        // Wrap the buffer in Uint8Array to satisfy browser BlobPart requirements
+        downloadUrl = URL.createObjectURL(new Blob([new Uint8Array(buffer as any)], { type: 'application/octet-stream' }))
       } 
       else if (exportFormat === 'tiff') {
         const rgba = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data
         const tiffBuffer = UTIF.encodeImage(rgba, canvas.width, canvas.height)
-        downloadUrl = URL.createObjectURL(new Blob([tiffBuffer], { type: 'image/tiff' }))
+        // Wrap the UTIF buffer in Uint8Array for safety
+        downloadUrl = URL.createObjectURL(new Blob([new Uint8Array(tiffBuffer as any)], { type: 'image/tiff' }))
       } 
       else if (exportFormat === 'eps') {
         const epsStr = generateEps(canvas)

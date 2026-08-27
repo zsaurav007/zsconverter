@@ -142,7 +142,9 @@ export default function PdfEditor() {
             canvas.height = viewport.height
             canvas.width = viewport.width
 
-            await page.render({ canvasContext: context, viewport }).promise
+            // Bypass volatile pdfjs-dist TypeScript definitions with as any
+            await page.render({ canvasContext: context, viewport } as any).promise
+            
             newPages.push({
               id: `pdf-page-${Date.now()}-${Math.random()}`,
               url: canvas.toDataURL('image/png'),
