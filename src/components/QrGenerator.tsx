@@ -8,7 +8,7 @@ import {
   Settings2, Download, Link2, ScanLine, QrCode, 
   UploadCloud, Copy, ExternalLink, CheckCircle2, 
   Camera, Image as ImageIcon, X 
-} from 'lucide-react' // Added 'X' here
+} from 'lucide-react'
 
 export default function QrGenerator() {
   // Mode State
@@ -128,9 +128,10 @@ export default function QrGenerator() {
     setScannedResult(null)
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+      
+      // videoRef is now guaranteed to exist because it's no longer conditionally mounted
       if (videoRef.current) {
         videoRef.current.srcObject = stream
-        videoRef.current.setAttribute("playsinline", "true") // Required for iOS Safari
         videoRef.current.play()
         setIsCameraActive(true)
         requestAnimationFrame(scanCameraFrame)
@@ -150,7 +151,8 @@ export default function QrGenerator() {
       canvas.width = video.videoWidth
       canvas.height = video.videoHeight
       const ctx = canvas.getContext('2d')
-      if (ctx) {
+      
+      if (ctx && canvas.width > 0 && canvas.height > 0) {
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
         const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "dontInvert" })
@@ -335,16 +337,29 @@ export default function QrGenerator() {
             ) : (
               // Live Camera Viewport
               <div className="flex-1 bg-black rounded-xl overflow-hidden relative flex items-center justify-center border border-slate-200 shadow-inner group">
-                {!isCameraActive ? (
-                   <div className="flex flex-col items-center text-slate-400 z-10">
+                
+                {/* 
+                  Video element MUST be mounted for the Ref to capture the DOM node immediately. 
+                  We visually hide it until it's active. PlaysInline and Muted are vital for iOS.
+                */}
+                <video 
+                  ref={videoRef} 
+                  className={`w-full h-full object-cover ${isCameraActive ? 'block' : 'hidden'}`} 
+                  playsInline 
+                  muted 
+                />
+
+                {!isCameraActive && (
+                   <div className="flex flex-col items-center text-slate-400 z-10 absolute">
                      <Camera className="w-12 h-12 mb-4 opacity-50 text-white" />
                      <button onClick={startCamera} className="px-6 py-2.5 bg-[#6384A3] text-white text-xs font-bold uppercase tracking-widest rounded hover:bg-[#4f6a83] transition-colors shadow-lg">
                        Enable Camera
                      </button>
                    </div>
-                ) : (
+                )}
+                
+                {isCameraActive && (
                   <>
-                    <video ref={videoRef} className="w-full h-full object-cover" />
                     {/* Viewfinder Overlay */}
                     <div className="absolute inset-0 z-10 pointer-events-none flex flex-col items-center justify-center">
                       <div className="w-48 h-48 border-2 border-[#6384A3]/60 relative">
