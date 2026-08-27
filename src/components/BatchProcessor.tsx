@@ -279,11 +279,11 @@ export default function BatchProcessor() {
         <div className="space-y-3 border-t border-slate-200 pt-4 flex-shrink-0">
           <label className="flex items-center gap-2 text-xs font-bold text-slate-700 uppercase tracking-wider cursor-pointer">
             <input type="checkbox" checked={enableBgRemoval} onChange={(e) => setEnableBgRemoval(e.target.checked)} disabled={isProcessing} className="w-4 h-4 accent-[#6384A3] rounded disabled:opacity-50" />
-            <Eraser className="w-4 h-4 text-[#6384A3]"/> Batch AI Erase
+            <Eraser className="w-4 h-4 text-[#6384A3]"/> Remove Background
           </label>
           {enableBgRemoval && (
             <div className="animate-in fade-in space-y-2 pt-2">
-              <p className="text-[10px] text-orange-600 font-bold uppercase tracking-widest">Note: AI processing on large batches may take a long time.</p>
+              <p className="text-[10px] text-orange-600 font-bold uppercase tracking-widest">Note: AI background Removal on large batches may take a long time.</p>
               <CustomDropdown 
                 value={bgModel} 
                 onChange={setBgModel} 
