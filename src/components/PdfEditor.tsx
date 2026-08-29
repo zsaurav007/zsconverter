@@ -446,7 +446,7 @@ export default function PdfEditor() {
           env.allowLocalModels = false; 
           
           const model = await AutoModel.from_pretrained(sigBgModel, {
-            config: { model_type: 'custom' },
+            config: { model_type: 'custom' } as any,
           });
 
           const processor = await AutoProcessor.from_pretrained(sigBgModel, {
@@ -461,7 +461,7 @@ export default function PdfEditor() {
               resample: 2,
               rescale_factor: 0.00392156862745098,
               size: { width: 1024, height: 1024 }
-            }
+            } as any
           });
 
           const imageToProcess = await RawImage.fromURL(optimizedDataUrl);

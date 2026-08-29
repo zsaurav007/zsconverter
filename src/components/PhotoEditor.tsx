@@ -119,7 +119,7 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
           
           // Bypasses the unsupported pipeline crash by loading the weights via custom config
           const model = await AutoModel.from_pretrained(selectedModel, {
-            config: { model_type: 'custom' },
+            config: { model_type: 'custom' } as any,
           });
 
           // Inject the exact tensor math parameters RMBG-1.4 needs
@@ -135,7 +135,7 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
               resample: 2,
               rescale_factor: 0.00392156862745098,
               size: { width: 1024, height: 1024 }
-            }
+            } as any
           });
 
           const imageToProcess = await RawImage.fromURL(optimizedDataUrl);
