@@ -1374,7 +1374,7 @@ export default function PdfEditor() {
         </div>
 
         {/* Main Grid / Preview Area */}
-        <div className="flex-1 p-4 lg:p-8 bg-white flex flex-col relative min-h-[400px] lg:h-full order-1 lg:order-2">
+        <div className="flex-1 p-4 lg:p-8 bg-white flex flex-col relative min-h-[400px] lg:h-full order-1 lg:order-2 min-w-0 min-h-0">
           <div className="flex justify-between items-center mb-4 lg:mb-6 border-b border-slate-100 pb-2 flex-shrink-0">
             <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">
               {pages.length} {pages.length === 1 ? 'Page' : 'Pages'} Loaded
@@ -1395,7 +1395,7 @@ export default function PdfEditor() {
             </div>
           ) : activePanel === 'signature' && signature.enabled && pages.length > 0 && sigPageTarget ? (
             // Live Signature Preview & Positioning (Right Side)
-            <div className="flex-1 flex flex-col bg-slate-100 rounded-xl border border-slate-200 relative select-none animate-in fade-in h-full min-h-[400px] overflow-hidden">
+            <div className="flex-1 flex flex-col bg-[#f1f5f9] rounded-xl relative select-none animate-in fade-in h-full min-h-[400px] overflow-hidden min-w-0 min-h-0">
               
               {/* Top Action Badges (Z-50) */}
               <div className="absolute top-3 left-3 z-50 bg-white/90 px-3 py-1.5 rounded shadow-sm text-[10px] font-bold text-slate-600 uppercase tracking-widest flex items-center gap-2 border border-slate-200 pointer-events-none">
@@ -1415,9 +1415,9 @@ export default function PdfEditor() {
               {renderPaginationOverlay()}
 
               {/* PDF Viewer Container (Padded to strictly prevent image overlap with top/bottom UI) */}
-              <div className="flex-1 overflow-hidden relative touch-none px-4 pt-16 pb-20 w-full h-full flex items-center justify-center">
+              <div className="flex-1 overflow-hidden relative touch-none px-4 pt-16 pb-20 w-full h-full flex items-center justify-center min-w-0 min-h-0 bg-[#f1f5f9]">
                 {showViewerGrid ? (
-                  <div className="absolute inset-0 z-40 bg-slate-100 overflow-y-auto px-4 pt-16 pb-20 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 animate-in fade-in">
+                  <div className="absolute inset-0 z-40 bg-[#f1f5f9] overflow-y-auto px-4 pt-16 pb-20 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 animate-in fade-in">
                     {pages.map((p, idx) => (
                       <div key={p.id} onClick={() => { setPreviewPageIndex(idx); setShowViewerGrid(false); }} className={`cursor-pointer border-2 rounded-lg overflow-hidden aspect-[3/4] relative transition-colors bg-white shadow-sm ${previewPageIndex === idx ? 'border-[#6384A3] ring-2 ring-[#6384A3]/30' : 'border-transparent hover:border-slate-300'}`}>
                         <img src={p.url} alt={`Thumb ${idx+1}`} className="w-full h-full object-contain" style={{ transform: `rotate(${p.rotation + p.fineRotation}deg)` }} />
@@ -1431,7 +1431,8 @@ export default function PdfEditor() {
                 ) : (
                   <div
                     ref={rightSideSigRef}
-                    className="relative shadow-lg bg-white touch-none inline-flex max-w-full max-h-full"
+                    className="relative shadow-lg touch-none flex min-w-0 min-h-0"
+                    style={{ maxWidth: '100%', maxHeight: '100%', backgroundColor: '#f1f5f9' }}
                     onPointerDown={() => handlePointerDownSig('right')}
                     onPointerMove={handlePointerMoveSig}
                     onPointerUp={handlePointerUpSig}
@@ -1449,8 +1450,8 @@ export default function PdfEditor() {
                       <>
                         <img 
                           src={sigPreviewUrl} 
-                          className="block pointer-events-none" 
-                          style={{ maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto', objectFit: 'contain' }}
+                          className="block pointer-events-none min-w-0 min-h-0" 
+                          style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', backgroundColor: '#f1f5f9' }}
                           alt="Placement Target" 
                           draggable={false}
                         />
@@ -1512,7 +1513,7 @@ export default function PdfEditor() {
 
       {/* Fullscreen Signature Modal */}
       {showSigModal && sigPageTarget && (
-        <div className="fixed inset-0 z-[160] bg-slate-900/95 flex flex-col md:flex-row animate-in fade-in duration-200">
+        <div className="fixed inset-0 z-[160] bg-slate-900/95 flex flex-col md:flex-row animate-in fade-in duration-200 min-h-0 min-w-0">
           
           {/* Settings Sidebar for Modal */}
           <div className="w-full md:w-80 bg-white md:h-full flex flex-col border-b md:border-b-0 md:border-r border-slate-200 overflow-y-auto shrink-0 z-40">
@@ -1533,7 +1534,7 @@ export default function PdfEditor() {
           </div>
           
           {/* Draggable Viewport in Modal */}
-          <div className="flex-1 relative touch-none select-none bg-slate-900 overflow-hidden flex flex-col">
+          <div className="flex-1 relative touch-none select-none bg-slate-900 overflow-hidden flex flex-col min-w-0 min-h-0">
               
              {/* Zoom Controls Overlay */}
              <div className="absolute top-4 right-4 z-50 flex gap-1 bg-slate-800/90 p-1.5 rounded-lg backdrop-blur border border-slate-700 shadow-xl">
@@ -1545,12 +1546,12 @@ export default function PdfEditor() {
              {renderPaginationOverlay()}
 
              {/* Modal PDF Viewer Container (Padded to strictly prevent image overlap with UI) */}
-             <div className="flex-1 overflow-auto relative w-full h-full z-10 px-4 pt-20 pb-24 md:px-8 md:pt-20 md:pb-24 flex custom-scrollbar">
+             <div className="flex-1 overflow-auto relative w-full h-full z-10 p-4 pt-20 pb-24 md:p-8 md:pt-20 md:pb-24 flex custom-scrollbar min-w-0 min-h-0 bg-[#f1f5f9]">
                {showViewerGrid ? (
-                 <div className="absolute inset-0 z-40 bg-slate-900/95 overflow-y-auto px-4 pt-20 pb-24 md:px-8 md:pt-20 md:pb-24 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 animate-in fade-in">
+                 <div className="absolute inset-0 z-40 bg-[#f1f5f9] overflow-y-auto px-4 pt-20 pb-24 md:px-8 md:pt-20 md:pb-24 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 animate-in fade-in">
                    {pages.map((p, idx) => (
                      <div key={p.id} onClick={() => { setPreviewPageIndex(idx); setShowViewerGrid(false); }} className={`cursor-pointer border-2 rounded-lg overflow-hidden aspect-[3/4] relative transition-colors bg-white shadow-xl ${previewPageIndex === idx ? 'border-blue-400 ring-2 ring-blue-400' : 'border-transparent hover:border-slate-500'}`}>
-                       <img src={p.url} alt={`Thumb ${idx+1}`} className="w-full h-full object-contain bg-slate-800" style={{ transform: `rotate(${p.rotation + p.fineRotation}deg)` }} />
+                       <img src={p.url} alt={`Thumb ${idx+1}`} className="w-full h-full object-contain bg-[#f1f5f9]" style={{ transform: `rotate(${p.rotation + p.fineRotation}deg)` }} />
                        <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded">Page {idx + 1}</div>
                        {signature.enabled && shouldApplySignature(idx, signature.applyMode, signature.customPages) && (
                          <div className="absolute top-1 right-1 bg-blue-500 text-white text-[9px] px-1.5 py-0.5 rounded shadow">Signed</div>
@@ -1559,10 +1560,11 @@ export default function PdfEditor() {
                    ))}
                  </div>
                ) : (
-                 <div className="m-auto flex items-center justify-center min-w-max min-h-max transition-all">
+                 <div className="m-auto flex items-center justify-center transition-all min-w-0 min-h-0">
                    <div 
                      ref={modalSigRef}
-                     className="relative shadow-2xl bg-white touch-none inline-block"
+                     className="relative shadow-2xl touch-none flex"
+                     style={{ backgroundColor: '#f1f5f9' }}
                      onPointerDown={() => handlePointerDownSig('modal')}
                      onPointerMove={handlePointerMoveSig}
                      onPointerUp={handlePointerUpSig}
@@ -1581,7 +1583,7 @@ export default function PdfEditor() {
                          <img 
                            src={sigPreviewUrl} 
                            className="block pointer-events-none" 
-                           style={{ height: `${75 * sigZoom}vh`, width: 'auto', maxWidth: 'none' }}
+                           style={{ height: `${75 * sigZoom}vh`, width: 'auto', maxWidth: 'none', backgroundColor: '#f1f5f9' }}
                            alt="Placement Target" 
                            draggable={false}
                          />
@@ -1682,7 +1684,7 @@ export default function PdfEditor() {
                   </div>
                   <div>
                     <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Contrast</label>
-                    <input type="range" min="50" max="150" value={editingPageData.contrast} onChange={(e) => updatePageAttributes(editingPageData.id, { contrast: Number(e.target.value) })} className="w-full accent-[#6384A3]" />
+                    <input type="range" min="50" max="150" value5={editingPageData.contrast} onChange={(e) => updatePageAttributes(editingPageData.id, { contrast: Number(e.target.value) })} className="w-full accent-[#6384A3]" />
                   </div>
                 </div>
                 
