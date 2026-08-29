@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react'
 import ReactCrop, { Crop } from 'react-image-crop'
 import 'react-image-crop/dist/ReactCrop.css'
-import { removeBackground, Config } from '@imgly/background-removal'
+import { removeBackground as imglyRemoveBackground, Config } from '@imgly/background-removal'
 import { jsPDF } from 'jspdf'
 import { Crop as CropIcon, Eraser, Download, Settings2, Image as ImageIcon, Palette, X, Undo2, Sparkles, Wand2, RotateCw, FlipHorizontal, FlipVertical, Square, RefreshCcw, Blend, Type, Maximize } from 'lucide-react'
 import CustomDropdown from './CustomDropdown'
@@ -59,13 +59,10 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
   const currentImage = history[history.length - 1] 
   const canUndo = history.length > 1
   
-  // Set default active tool to 'export' to have Format & Export expanded by default
   const [activeTool, setActiveTool] = useState<'crop' | 'bg' | 'enhance' | 'transform' | 'resize' | 'export' | null>('export')
   
-  // Base Name for Exporting
   const baseName = file.name.substring(0, file.name.lastIndexOf('.')) || file.name
 
-  // Track real dimensions of current state
   const [imgDims, setImgDims] = useState({ w: 0, h: 0 })
   useEffect(() => {
     const img = new Image()
@@ -73,18 +70,15 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
     img.src = currentImage
   }, [currentImage])
 
-  // Transform State
   const [liveTransform, setLiveTransform] = useState({ rotate: 0, flipH: false, flipV: false, radius: 0 })
 
-  // Crop State
   const [cropAspect, setCropAspect] = useState<number | undefined>(undefined)
   const [crop, setCrop] = useState<Crop>({ unit: '%', width: 50, height: 50, x: 25, y: 25 })
   const [completedCrop, setCompletedCrop] = useState<Crop | null>(null)
   const imgRef = useRef<HTMLImageElement>(null)
 
-  // Background State
   const [isRemovingBg, setIsRemovingBg] = useState(false)
-  const [selectedModel, setSelectedModel] = useState('isnet_fp16')
+  const [selectedModel, setSelectedModel] = useState('briaai/RMBG-1.4')
   const [bgType, setBgType] = useState<'transparent' | 'color' | 'gradient' | 'image'>('transparent')
   const [bgColor, setBgColor] = useState('#ffffff')
   const [bgGradientColor1, setBgGradientColor1] = useState('#6384A3')
@@ -92,36 +86,118 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
   const [bgImage, setBgImage] = useState<string | null>(null)
   const [bgImageScale, setBgImageScale] = useState<number>(100) 
 
-  // Enhance State
   const defaultFilters = { b: 100, c: 100, s: 100, sep: 0 }
   const [liveFilters, setLiveFilters] = useState(defaultFilters)
 
-  // Resize State
   const [resizeWidth, setResizeWidth] = useState<number | ''>('')
   const [resizeHeight, setResizeHeight] = useState<number | ''>('')
   const [maintainRatio, setMaintainRatio] = useState(true)
   const [presetSize, setPresetSize] = useState('custom')
 
-  // Export & Conversion State
   const [exportFormat, setExportFormat] = useState<string>('image/webp')
   const [compressionQuality, setCompressionQuality] = useState<number>(85)
 
-  // Preview Size State
   const [estimatedSize, setEstimatedSize] = useState<number | null>(null)
   const [isCalculatingSize, setIsCalculatingSize] = useState(false)
 
   const pushToGlobalHistory = (newImageUrl: string) => setHistory(prev => [...prev, newImageUrl])
   const handleUndo = () => { if (canUndo) setHistory(prev => prev.slice(0, -1)) }
 
+  // High-Resolution Custom Architecture Background Removal
   const handleRemoveBg = async () => {
     setIsRemovingBg(true)
     try {
-      const optimizedImage = await optimizeImageForAI(currentImage)
-      const bgConfig: Config = { model: selectedModel as any, output: { format: "image/png" } }
-      const imageBlob = await removeBackground(optimizedImage, bgConfig) 
-      pushToGlobalHistory(URL.createObjectURL(imageBlob))
+      const optimizedDataUrl = await optimizeImageForAI(currentImage)
+      let removedSuccessfully = false;
+
+      // Force Manual Architecture Loading for RMBG-1.4
+      if (selectedModel === 'briaai/RMBG-1.4') {
+        try {
+          const { AutoModel, AutoProcessor, RawImage, env } = await import('@huggingface/transformers');
+          
+          env.allowLocalModels = false; 
+          
+          // Bypasses the unsupported pipeline crash by loading the weights via custom config
+          const model = await AutoModel.from_pretrained(selectedModel, {
+            config: { model_type: 'custom' },
+          });
+
+          // Inject the exact tensor math parameters RMBG-1.4 needs
+          const processor = await AutoProcessor.from_pretrained(selectedModel, {
+            config: {
+              do_normalize: true,
+              do_pad: false,
+              do_rescale: true,
+              do_resize: true,
+              image_mean: [0.5, 0.5, 0.5],
+              feature_extractor_type: "ImageFeatureExtractor",
+              image_std: [1, 1, 1],
+              resample: 2,
+              rescale_factor: 0.00392156862745098,
+              size: { width: 1024, height: 1024 }
+            }
+          });
+
+          const imageToProcess = await RawImage.fromURL(optimizedDataUrl);
+          const { pixel_values } = await processor(imageToProcess);
+          
+          // Generate AI Alpha Matte
+          const outputs = await model({ input: pixel_values });
+          const outTensor = Object.values(outputs)[0] as any;
+          
+          if (!outTensor || !outTensor.data) throw new Error("Invalid tensor output");
+
+          const maskWidth = outTensor.dims[3];
+          const maskHeight = outTensor.dims[2];
+
+          const maskCanvas = document.createElement('canvas');
+          maskCanvas.width = maskWidth;
+          maskCanvas.height = maskHeight;
+          const maskCtx = maskCanvas.getContext('2d');
+          if (!maskCtx) throw new Error("Mask Context failed");
+
+          const imgData = maskCtx.createImageData(maskWidth, maskHeight);
+          for (let i = 0; i < outTensor.data.length; i++) {
+             const val = Math.max(0, Math.min(255, Math.round(outTensor.data[i] * 255)));
+             imgData.data[i * 4] = 0;     // R
+             imgData.data[i * 4 + 1] = 0; // G
+             imgData.data[i * 4 + 2] = 0; // B
+             imgData.data[i * 4 + 3] = val; // Map AI output directly to transparency
+          }
+          maskCtx.putImageData(imgData, 0, 0);
+
+          // Get Full-Res Original Image
+          const originalImg = await createImage(currentImage);
+          const finalCanvas = document.createElement('canvas');
+          finalCanvas.width = originalImg.width;
+          finalCanvas.height = originalImg.height;
+          const finalCtx = finalCanvas.getContext('2d');
+          if (!finalCtx) throw new Error("Final context failed");
+
+          finalCtx.drawImage(originalImg, 0, 0);
+          finalCtx.globalCompositeOperation = 'destination-in';
+          // Scales the mask flawlessly to the massive original resolution
+          finalCtx.drawImage(maskCanvas, 0, 0, finalCanvas.width, finalCanvas.height);
+          
+          pushToGlobalHistory(finalCanvas.toDataURL('image/png'));
+          removedSuccessfully = true;
+        } catch (hfError) {
+          console.warn("Manual RMBG-1.4 engine failed. Falling back to Imgly...", hfError);
+        }
+      }
+
+      // Fail-safe Fallback 
+      if (!removedSuccessfully) {
+        const fallbackModel = selectedModel === 'briaai/RMBG-1.4' ? 'isnet' : selectedModel;
+        const bgConfig: Config = { model: fallbackModel as any, output: { format: "image/png" } }
+        
+        const imageBlob = await imglyRemoveBackground(currentImage, bgConfig) 
+        pushToGlobalHistory(URL.createObjectURL(imageBlob))
+      }
+
     } catch (error) {
-      alert("Failed to remove background.")
+      console.error("BG Removal Critical Error:", error)
+      alert("Failed to remove background. Ensure you have a stable internet connection.")
     } finally {
       setIsRemovingBg(false)
     }
@@ -384,7 +460,6 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
     return new Promise<Blob | null>(resolve => canvas.toBlob(resolve, mimeType, quality))
   }
 
-  // Debounced output file size estimator
   useEffect(() => {
     let isMounted = true;
     const calculate = async () => {
@@ -422,9 +497,6 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
     
     link.download = `${baseName}_zs_converter.${ext}`
     link.click()
-    
-    // Explicitly NOT calling onComplete(finalUrl)
-    // This perfectly prevents the editor from unmounting or "disappearing"
   }
 
   const isLosslessFormat = exportFormat === 'image/png' || exportFormat === 'application/pdf' || exportFormat === 'image/x-icon'
@@ -494,9 +566,9 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
                     onChange={setSelectedModel} 
                     direction="down"
                     options={[
-                      { value: 'isnet_quint8', label: 'Light Model (Fastest)' },
-                      { value: 'isnet_fp16', label: 'Medium Model (Balanced)' },
-                      { value: 'isnet', label: 'Heavy Model (Highest Quality)' }
+                      { value: 'briaai/RMBG-1.4', label: 'Pro AI (Best for Objects & Products)' },
+                      { value: 'isnet_fp16', label: 'Standard AI (Best for People & Faces)' },
+                      { value: 'isnet', label: 'Maximum Detail AI (Best for Hair & Edges)' }
                     ]}
                   />
                   <button onClick={handleRemoveBg} disabled={isRemovingBg} className="w-full py-2.5 mt-2 bg-[#6384A3] text-white text-[10px] font-bold uppercase tracking-widest rounded hover:bg-[#4f6a83] disabled:opacity-50 flex justify-center items-center gap-2">
