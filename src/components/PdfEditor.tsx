@@ -8,7 +8,7 @@ import { removeBackground, Config } from '@imgly/background-removal'
 import { DndContext, closestCenter, TouchSensor, MouseSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, useSortable, rectSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Settings2, Trash2, Eye, Download, RotateCw, Lock, Unlock, FileText, Type, SlidersHorizontal, X, FileImage, ShieldCheck, Layers, Scissors, Wand2, Hash, Edit3, PenTool, Image as ImageIcon, Sparkles, Move, ChevronLeft, ChevronRight, LayoutGrid, ZoomIn, ZoomOut } from 'lucide-react'
+import { Settings2, Trash2, Eye, Download, RotateCw, Lock, Unlock, FileText, Type, SlidersHorizontal, X, FileImage, ShieldCheck, Layers, Scissors, Wand2, Hash, Edit3, PenTool, Image as ImageIcon, Sparkles, Move, ChevronLeft, ChevronRight, LayoutGrid, ZoomIn, ZoomOut, Plus, Trash, MoreVertical, CheckCircle2 } from 'lucide-react'
 import CustomDropdown from './CustomDropdown'
 
 // --- HELPER FUNCTIONS ---
@@ -54,13 +54,12 @@ interface SortableItemProps {
   brightness: number
   contrast: number
   grayscale: boolean
-  cleanBackground: boolean
   onRemove: (id: string) => void
   onRotate: (id: string) => void
   onEdit: (id: string) => void
 }
 
-function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brightness, contrast, grayscale, cleanBackground, onRemove, onRotate, onEdit }: SortableItemProps) {
+function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brightness, contrast, grayscale, onRemove, onRotate, onEdit }: SortableItemProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
   
   const style = {
@@ -73,8 +72,7 @@ function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brigh
   const imageScale = isRotated ? 0.75 : 1
 
   const g = grayscale ? 'grayscale(100%)' : ''
-  const cleanFx = cleanBackground ? 'contrast(150%) brightness(110%)' : ''
-  const filterStyle = `brightness(${brightness}%) contrast(${contrast}%) ${g} ${cleanFx}`.trim()
+  const filterStyle = `brightness(${brightness}%) contrast(${contrast}%) ${g}`.trim()
 
   return (
     <div 
@@ -119,7 +117,7 @@ function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brigh
 
       <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-2 py-0.5 rounded font-bold shadow-sm flex items-center gap-1">
         {index + 1}
-        {(fineRotation !== 0 || scale !== 1 || brightness !== 100 || grayscale || cleanBackground) && <span className="text-[#6384A3] ml-1">Edited</span>}
+        {(fineRotation !== 0 || scale !== 1 || brightness !== 100 || grayscale) && <span className="text-[#6384A3] ml-1">Edited</span>}
       </div>
     </div>
   )
@@ -129,6 +127,7 @@ function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brigh
 type PageItem = { 
   id: string; 
   url: string; 
+  originalUrl: string; 
   isLossless: boolean; 
   rotation: number; 
   fineRotation: number; 
@@ -136,13 +135,12 @@ type PageItem = {
   brightness: number;
   contrast: number;
   grayscale: boolean;
-  cleanBackground: boolean;
 }
 
 type SigPlacement = { x: number, y: number, scale: number, opacity: number }
 
-type SignatureState = {
-  enabled: boolean;
+type SignatureItem = {
+  id: string;
   mode: 'text' | 'image';
   text: string;
   font: string;
@@ -158,6 +156,7 @@ export default function PdfEditor() {
   const [isProcessing, setIsProcessing] = useState(false)
   const [loadingText, setLoadingText] = useState('')
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [toast, setToast] = useState<{message: string, id: number} | null>(null)
   
   const [originalDocName, setOriginalDocName] = useState('document')
 
@@ -175,6 +174,14 @@ export default function PdfEditor() {
     }
   }, [activePanel])
 
+  const showToast = useCallback((message: string) => {
+    const id = Date.now();
+    setToast({ message, id });
+    setTimeout(() => {
+      setToast(current => current?.id === id ? null : current);
+    }, 3000);
+  }, []);
+
   const [unlockPassword, setUnlockPassword] = useState('')
   const [encryptPassword, setEncryptPassword] = useState('')
   
@@ -183,25 +190,30 @@ export default function PdfEditor() {
   const [watermarkOpacity, setWatermarkOpacity] = useState(30)
   const [addPageNumbers, setAddPageNumbers] = useState(false)
   
-  // Signature State
-  const [signature, setSignature] = useState<SignatureState>({
-    enabled: false,
+  // Multiple Signatures State (Starts with 1 default to prevent empty array crashes)
+  const defaultSigId = `sig-${Date.now()}`;
+  const [signatures, setSignatures] = useState<SignatureItem[]>([{
+    id: defaultSigId,
     mode: 'text',
-    text: 'John Doe',
+    text: 'New Signature',
     font: 'Brush Script MT, cursive',
     color: '#000033',
     imageUrl: null,
     applyMode: 'all',
     customPages: '',
     placements: {}
-  })
-  
+  }])
+  const [activeSigId, setActiveSigId] = useState<string | null>(defaultSigId)
   const [sigBgModel, setSigBgModel] = useState('briaai/RMBG-1.4')
+  const [pageBgModel, setPageBgModel] = useState('briaai/RMBG-1.4')
+  
+  const [openMenuSigId, setOpenMenuSigId] = useState<string | null>(null)
 
   const [showSigModal, setShowSigModal] = useState(false)
   const [isDraggingSig, setIsDraggingSig] = useState(false)
+  const [draggingSigId, setDraggingSigId] = useState<string | null>(null)
   const [draggingContext, setDraggingContext] = useState<'right' | 'modal' | null>(null)
-  const [resizingState, setResizingState] = useState<{ startX: number, startY: number, startScale: number, corner: string } | null>(null)
+  const [resizingState, setResizingState] = useState<{ startX: number, startY: number, startScale: number, corner: string, sigId: string } | null>(null)
   
   const [previewPageIndex, setPreviewPageIndex] = useState(0)
   const [showViewerGrid, setShowViewerGrid] = useState(false)
@@ -263,7 +275,6 @@ export default function PdfEditor() {
       const target = pages[previewPageIndex];
       if (target) {
         setIsGeneratingSigPreview(true);
-        // Render the page WITH all local enhancements, but WITHOUT the signature
         renderPageToCanvas(target, previewPageIndex, false, true).then(canvas => {
           if (canvas && isMounted) {
             setSigPreviewUrl(canvas.toDataURL('image/jpeg', 0.85));
@@ -276,19 +287,86 @@ export default function PdfEditor() {
   }, [showSigModal, activePanel, previewPageIndex, pages, cleanWatermarks, enableCompression, compressionGrayscale]);
 
   // --- SIGNATURE HELPERS ---
-  const getSigPlacement = useCallback((index: number) => {
-    return signature.placements[index] || { x: 50, y: 80, scale: 50, opacity: 100 }
-  }, [signature.placements])
+  const addNewSignature = () => {
+    const newSig: SignatureItem = {
+      id: `sig-${Date.now()}`,
+      mode: 'text',
+      text: 'New Signature',
+      font: 'Brush Script MT, cursive',
+      color: '#000033',
+      imageUrl: null,
+      applyMode: 'all',
+      customPages: '',
+      placements: {}
+    }
+    setSignatures(prev => [...prev, newSig])
+    setActiveSigId(newSig.id)
+    showToast('New signature added')
+  }
 
-  const updateSigPlacement = useCallback((index: number, updates: Partial<SigPlacement>) => {
-    setSignature(s => ({
-      ...s,
-      placements: {
-        ...s.placements,
-        [index]: { ...getSigPlacement(index), ...updates }
+  const updateSignature = (id: string, updates: Partial<SignatureItem>) => {
+    setSignatures(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s))
+  }
+
+  const removeSignature = (id: string) => {
+    if (signatures.length <= 1) {
+      const newSigId = `sig-${Date.now()}`;
+      setSignatures([{
+        id: newSigId,
+        mode: 'text',
+        text: 'New Signature',
+        font: 'Brush Script MT, cursive',
+        color: '#000033',
+        imageUrl: null,
+        applyMode: 'all',
+        customPages: '',
+        placements: {}
+      }]);
+      setActiveSigId(newSigId);
+      showToast('Signature reset to default');
+      return;
+    }
+    const newSigs = signatures.filter(s => s.id !== id);
+    setSignatures(newSigs);
+    if (activeSigId === id) {
+      setActiveSigId(newSigs[0].id);
+    }
+    showToast('Signature removed');
+  }
+
+  const getSigPlacement = useCallback((sig: SignatureItem, index: number) => {
+    return sig.placements[index] || { x: 50, y: 80, scale: 50, opacity: 100 }
+  }, [])
+
+  const updateSigPlacement = useCallback((sigId: string, index: number, updates: Partial<SigPlacement>) => {
+    setSignatures(sigs => sigs.map(s => {
+      if (s.id !== sigId) return s;
+      return {
+        ...s,
+        placements: {
+          ...s.placements,
+          [index]: { ...getSigPlacement(s, index), ...updates }
+        }
       }
     }))
   }, [getSigPlacement])
+
+  const syncPlacementToAllPages = (sigId: string, sourceIndex: number) => {
+    setSignatures(sigs => sigs.map(s => {
+      if (s.id !== sigId) return s;
+      const sourcePlacement = getSigPlacement(s, sourceIndex);
+      const newPlacements: Record<number, SigPlacement> = {};
+      pages.forEach((_, i) => {
+        newPlacements[i] = { ...sourcePlacement };
+      });
+      return {
+        ...s,
+        applyMode: 'all',
+        placements: newPlacements
+      }
+    }))
+    showToast('Signature position applied to all pages')
+  }
 
   const shouldApplySignature = useCallback((pageIndex: number, applyMode: 'all' | 'custom', customPages: string) => {
     if (applyMode === 'all') return true;
@@ -328,6 +406,7 @@ export default function PdfEditor() {
       for (const file of acceptedFiles) {
         if (file.type === 'application/pdf') {
           setLoadingText(`Extracting ${file.name}...`)
+          await new Promise(r => setTimeout(r, 50)) // allow UI to paint
           const arrayBuffer = await file.arrayBuffer()
           const pdfjsLib = await import('pdfjs-dist')
           
@@ -354,9 +433,11 @@ export default function PdfEditor() {
 
             await page.render({ canvasContext: context, viewport } as any).promise
             
+            const dataUrl = canvas.toDataURL('image/png')
             newPages.push({
               id: `pdf-page-${Date.now()}-${Math.random()}`,
-              url: canvas.toDataURL('image/png'),
+              url: dataUrl,
+              originalUrl: dataUrl,
               isLossless: true,
               rotation: 0,
               fineRotation: 0,
@@ -364,14 +445,16 @@ export default function PdfEditor() {
               brightness: 100,
               contrast: 100,
               grayscale: false,
-              cleanBackground: false
             })
           }
         } else if (file.type.startsWith('image/')) {
           setLoadingText('Adding image...')
+          await new Promise(r => setTimeout(r, 50))
+          const objectUrl = URL.createObjectURL(file)
           newPages.push({
             id: `image-${file.name}-${Date.now()}`,
-            url: URL.createObjectURL(file),
+            url: objectUrl,
+            originalUrl: objectUrl,
             isLossless: file.type === 'image/png' || file.type === 'image/webp',
             rotation: 0,
             fineRotation: 0,
@@ -379,20 +462,20 @@ export default function PdfEditor() {
             brightness: 100,
             contrast: 100,
             grayscale: false,
-            cleanBackground: false
           })
         }
       }
 
       setPages(prev => [...prev, ...newPages])
       setUnlockPassword('')
+      showToast('Files loaded successfully')
     } catch (error) {
       alert("Failed to process the file. It may be corrupted or highly encrypted.")
     } finally {
       setIsProcessing(false)
       setLoadingText('')
     }
-  }, [unlockPassword, originalDocName])
+  }, [unlockPassword, originalDocName, showToast])
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -407,35 +490,156 @@ export default function PdfEditor() {
         const newIndex = items.findIndex((item) => item.id === over.id)
         return arrayMove(items, oldIndex, newIndex)
       })
+      showToast('Pages reordered')
     }
   }
 
-  const removePage = (idToRemove: string) => setPages(items => items.filter(item => item.id !== idToRemove))
+  const removePage = (idToRemove: string) => {
+    setPages(items => items.filter(item => item.id !== idToRemove))
+    showToast('Page removed')
+  }
+
   const rotatePage = (idToRotate: string) => {
     setPages(items => items.map(item => item.id === idToRotate ? { ...item, rotation: (item.rotation + 90) % 360 } : item))
+    showToast('Page rotated')
   }
+
   const updatePageAttributes = (id: string, updates: Partial<PageItem>) => {
     setPages(items => items.map(item => item.id === id ? { ...item, ...updates } : item))
   }
+
   const clearAll = () => {
     setPages([])
     setOriginalDocName('document')
     setPreviewPageIndex(0)
-    setSignature(s => ({ ...s, placements: {} }))
+    
+    // Always leave at least one valid signature to avoid undefined crashes
+    const newSigId = `sig-${Date.now()}`;
+    setSignatures([{
+      id: newSigId,
+      mode: 'text',
+      text: 'New Signature',
+      font: 'Brush Script MT, cursive',
+      color: '#000033',
+      imageUrl: null,
+      applyMode: 'all',
+      customPages: '',
+      placements: {}
+    }])
+    setActiveSigId(newSigId)
+    showToast('All pages & settings cleared')
   }
 
-  const handleSigImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleSigImageUpload = (sigId: string, e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      setSignature(s => ({ ...s, imageUrl: URL.createObjectURL(e.target.files![0]), mode: 'image' }))
+      updateSignature(sigId, { imageUrl: URL.createObjectURL(e.target.files![0]), mode: 'image' })
     }
   }
 
-  const handleRemoveSigBg = async () => {
-    if (!signature.imageUrl) return
+  const handleRemovePageBg = async (pageId: string, imageUrl: string) => {
+    if (!imageUrl) return
+    setIsProcessing(true)
+    setLoadingText('Removing Background from Page...')
+    await new Promise(r => setTimeout(r, 50)) // Force UI render
+
+    try {
+      const optimizedDataUrl = await optimizeImageForAI(imageUrl)
+      let removedSuccessfully = false;
+
+      if (pageBgModel === 'briaai/RMBG-1.4') {
+        try {
+          const { AutoModel, AutoProcessor, RawImage, env } = await import('@huggingface/transformers');
+          
+          env.allowLocalModels = false; 
+          
+          const model = await AutoModel.from_pretrained(pageBgModel, {
+            config: { model_type: 'custom' } as any,
+          });
+
+          const processor = await AutoProcessor.from_pretrained(pageBgModel, {
+            config: {
+              do_normalize: true,
+              do_pad: false,
+              do_rescale: true,
+              do_resize: true,
+              image_mean: [0.5, 0.5, 0.5],
+              feature_extractor_type: "ImageFeatureExtractor",
+              image_std: [1, 1, 1],
+              resample: 2,
+              rescale_factor: 0.00392156862745098,
+              size: { width: 1024, height: 1024 }
+            } as any
+          });
+
+          const imageToProcess = await RawImage.fromURL(optimizedDataUrl);
+          const { pixel_values } = await processor(imageToProcess);
+          
+          const outputs = await model({ input: pixel_values });
+          const outTensor = Object.values(outputs)[0] as any;
+          
+          if (!outTensor || !outTensor.data) throw new Error("Invalid tensor output");
+
+          const maskWidth = outTensor.dims[3];
+          const maskHeight = outTensor.dims[2];
+
+          const maskCanvas = document.createElement('canvas');
+          maskCanvas.width = maskWidth;
+          maskCanvas.height = maskHeight;
+          const maskCtx = maskCanvas.getContext('2d');
+          if (!maskCtx) throw new Error("Mask Context failed");
+
+          const imgData = maskCtx.createImageData(maskWidth, maskHeight);
+          for (let i = 0; i < outTensor.data.length; i++) {
+             const val = Math.max(0, Math.min(255, Math.round(outTensor.data[i] * 255)));
+             imgData.data[i * 4] = 0;     // R
+             imgData.data[i * 4 + 1] = 0; // G
+             imgData.data[i * 4 + 2] = 0; // B
+             imgData.data[i * 4 + 3] = val; 
+          }
+          maskCtx.putImageData(imgData, 0, 0);
+
+          const originalImg = await createImage(imageUrl);
+          const finalCanvas = document.createElement('canvas');
+          finalCanvas.width = originalImg.width;
+          finalCanvas.height = originalImg.height;
+          const finalCtx = finalCanvas.getContext('2d');
+          if (!finalCtx) throw new Error("Final context failed");
+
+          finalCtx.drawImage(originalImg, 0, 0);
+          finalCtx.globalCompositeOperation = 'destination-in';
+          finalCtx.drawImage(maskCanvas, 0, 0, finalCanvas.width, finalCanvas.height);
+          
+          updatePageAttributes(pageId, { url: finalCanvas.toDataURL('image/png') })
+          removedSuccessfully = true;
+        } catch (hfError) {
+          console.warn("Manual RMBG-1.4 engine failed. Falling back to Imgly...", hfError);
+        }
+      }
+
+      if (!removedSuccessfully) {
+        const fallbackModel = pageBgModel === 'briaai/RMBG-1.4' ? 'isnet' : pageBgModel;
+        const bgConfig: Config = { model: fallbackModel as any, output: { format: "image/png" } }
+        
+        const blob = await removeBackground(imageUrl, bgConfig) 
+        updatePageAttributes(pageId, { url: URL.createObjectURL(blob) })
+      }
+      showToast('Page background removed')
+    } catch (e) {
+      alert("Background removal failed.")
+    } finally {
+      setIsProcessing(false)
+      setLoadingText('')
+    }
+  }
+
+  const handleRemoveSigBg = async (sigId: string, imageUrl: string) => {
+    if (!imageUrl) return
     setIsProcessing(true)
     setLoadingText('Removing Background...')
+    await new Promise(r => setTimeout(r, 50)) // Force render
+
     try {
-      const optimizedDataUrl = await optimizeImageForAI(signature.imageUrl)
+      const optimizedDataUrl = await optimizeImageForAI(imageUrl)
       let removedSuccessfully = false;
 
       // Manual Architecture Loading for RMBG-1.4
@@ -487,11 +691,11 @@ export default function PdfEditor() {
              imgData.data[i * 4] = 0;     // R
              imgData.data[i * 4 + 1] = 0; // G
              imgData.data[i * 4 + 2] = 0; // B
-             imgData.data[i * 4 + 3] = val; // Map AI output directly to transparency
+             imgData.data[i * 4 + 3] = val; 
           }
           maskCtx.putImageData(imgData, 0, 0);
 
-          const originalImg = await createImage(signature.imageUrl);
+          const originalImg = await createImage(imageUrl);
           const finalCanvas = document.createElement('canvas');
           finalCanvas.width = originalImg.width;
           finalCanvas.height = originalImg.height;
@@ -502,7 +706,7 @@ export default function PdfEditor() {
           finalCtx.globalCompositeOperation = 'destination-in';
           finalCtx.drawImage(maskCanvas, 0, 0, finalCanvas.width, finalCanvas.height);
           
-          setSignature(s => ({ ...s, imageUrl: finalCanvas.toDataURL('image/png') }))
+          updateSignature(sigId, { imageUrl: finalCanvas.toDataURL('image/png') })
           removedSuccessfully = true;
         } catch (hfError) {
           console.warn("Manual RMBG-1.4 engine failed. Falling back to Imgly...", hfError);
@@ -514,9 +718,10 @@ export default function PdfEditor() {
         const fallbackModel = sigBgModel === 'briaai/RMBG-1.4' ? 'isnet' : sigBgModel;
         const bgConfig: Config = { model: fallbackModel as any, output: { format: "image/png" } }
         
-        const blob = await removeBackground(signature.imageUrl, bgConfig) 
-        setSignature(s => ({ ...s, imageUrl: URL.createObjectURL(blob) }))
+        const blob = await removeBackground(imageUrl, bgConfig) 
+        updateSignature(sigId, { imageUrl: URL.createObjectURL(blob) })
       }
+      showToast('Signature background removed')
     } catch (e) {
       alert("Background removal failed.")
     } finally {
@@ -525,18 +730,21 @@ export default function PdfEditor() {
     }
   }
 
-  const handleEnhanceSig = async () => {
-    if (!signature.imageUrl) return
+  const handleEnhanceSig = async (sigId: string, imageUrl: string) => {
+    if (!imageUrl) return
     setIsProcessing(true)
     setLoadingText('Enhancing Signature...')
+    await new Promise(r => setTimeout(r, 50)) // Force render
+
     try {
-      const img = await createImage(signature.imageUrl)
+      const img = await createImage(imageUrl)
       const cvs = document.createElement('canvas')
       cvs.width = img.width; cvs.height = img.height
       const ctx = cvs.getContext('2d')!
       ctx.filter = 'contrast(200%) brightness(80%) grayscale(100%)'
       ctx.drawImage(img, 0, 0)
-      setSignature(s => ({ ...s, imageUrl: cvs.toDataURL('image/png') }))
+      updateSignature(sigId, { imageUrl: cvs.toDataURL('image/png') })
+      showToast('Signature enhanced')
     } catch (e) {
       alert("Enhancement failed.")
     } finally {
@@ -546,18 +754,29 @@ export default function PdfEditor() {
   }
 
   // Drag Placement Handlers
-  const handlePointerDownSig = (ctx: 'right' | 'modal') => { setIsDraggingSig(true); setDraggingContext(ctx); }
-  const handlePointerUpSig = () => { setIsDraggingSig(false); setDraggingContext(null); setResizingState(null); }
+  const handlePointerDownSig = (ctx: 'right' | 'modal', sigId: string) => { 
+    setIsDraggingSig(true); 
+    setDraggingContext(ctx); 
+    setDraggingSigId(sigId); 
+    setActiveSigId(sigId); 
+    setOpenMenuSigId(null);
+  }
+  const handlePointerUpSig = () => { setIsDraggingSig(false); setDraggingContext(null); setResizingState(null); setDraggingSigId(null); }
   
-  const handleResizeDown = (e: React.PointerEvent, corner: string, ctx: 'right' | 'modal') => {
+  const handleResizeDown = (e: React.PointerEvent, corner: string, ctx: 'right' | 'modal', sigId: string) => {
     e.stopPropagation() 
+    const sig = signatures.find(s => s.id === sigId)
+    if (!sig) return;
     setResizingState({
       startX: e.clientX,
       startY: e.clientY,
-      startScale: getSigPlacement(previewPageIndex).scale,
-      corner
+      startScale: getSigPlacement(sig, previewPageIndex).scale,
+      corner,
+      sigId
     })
     setDraggingContext(ctx)
+    setActiveSigId(sigId)
+    setOpenMenuSigId(null)
   }
 
   const handlePointerMoveSig = (e: React.PointerEvent) => {
@@ -574,11 +793,11 @@ export default function PdfEditor() {
       else if (resizingState.corner === 'bl') delta = (-dx + dy) * 0.2
 
       const newScale = Math.max(10, Math.min(200, resizingState.startScale + delta))
-      updateSigPlacement(previewPageIndex, { scale: newScale })
+      updateSigPlacement(resizingState.sigId, previewPageIndex, { scale: newScale })
       return
     }
 
-    if (isDraggingSig) {
+    if (isDraggingSig && draggingSigId) {
       const ref = draggingContext === 'right' ? rightSideSigRef : modalSigRef
       if (!ref.current) return
       const rect = ref.current.getBoundingClientRect()
@@ -586,43 +805,90 @@ export default function PdfEditor() {
       let y = ((e.clientY - rect.top) / rect.height) * 100
       x = Math.max(0, Math.min(100, x))
       y = Math.max(0, Math.min(100, y))
-      updateSigPlacement(previewPageIndex, { x, y })
+      updateSigPlacement(draggingSigId, previewPageIndex, { x, y })
     }
   }
 
   const renderSignatureOverlay = (ctx: 'right' | 'modal') => {
-    const placement = getSigPlacement(previewPageIndex)
-    return (
-      <div 
-        className="absolute transition-opacity duration-75 z-20"
-        style={{
-          left: `${placement.x}%`,
-          top: `${placement.y}%`,
-          transform: 'translate(-50%, -50%)',
-          opacity: placement.opacity / 100,
-          pointerEvents: 'none'
-        }}
-      >
-        <div className="relative pointer-events-auto group">
-          {signature.mode === 'text' ? (
-            <span style={{ fontFamily: signature.font, color: signature.color, fontSize: `${(placement.scale / 100) * 3}rem`, whiteSpace: 'nowrap', display: 'block', padding: '4px' }}>
-              {signature.text || ' '}
-            </span>
-          ) : signature.imageUrl ? (
-            <img src={signature.imageUrl} alt="Sig" style={{ width: `${placement.scale * 3}px` }} className="mix-blend-multiply block pointer-events-none" />
-          ) : (
-            <div style={{ width: `${placement.scale * 3}px`, height: '40px' }} /> 
-          )}
-          
-          <div className={`absolute inset-0 border-2 border-dashed ${(isDraggingSig || resizingState) && draggingContext === ctx ? 'border-blue-500 bg-blue-500/10' : 'border-transparent group-hover:border-slate-300'} rounded pointer-events-none transition-colors`} />
-          
-          <div className="absolute -top-3 -left-3 w-6 h-6 lg:w-4 lg:h-4 bg-white border-2 border-blue-500 rounded-full cursor-nwse-resize pointer-events-auto opacity-100 lg:opacity-0 group-hover:opacity-100 transition-opacity" onPointerDown={(e) => handleResizeDown(e, 'tl', ctx)} />
-          <div className="absolute -top-3 -right-3 w-6 h-6 lg:w-4 lg:h-4 bg-white border-2 border-blue-500 rounded-full cursor-nesw-resize pointer-events-auto opacity-100 lg:opacity-0 group-hover:opacity-100 transition-opacity" onPointerDown={(e) => handleResizeDown(e, 'tr', ctx)} />
-          <div className="absolute -bottom-3 -left-3 w-6 h-6 lg:w-4 lg:h-4 bg-white border-2 border-blue-500 rounded-full cursor-nesw-resize pointer-events-auto opacity-100 lg:opacity-0 group-hover:opacity-100 transition-opacity" onPointerDown={(e) => handleResizeDown(e, 'bl', ctx)} />
-          <div className="absolute -bottom-3 -right-3 w-6 h-6 lg:w-4 lg:h-4 bg-white border-2 border-blue-500 rounded-full cursor-nwse-resize pointer-events-auto opacity-100 lg:opacity-0 group-hover:opacity-100 transition-opacity" onPointerDown={(e) => handleResizeDown(e, 'br', ctx)} />
+    return signatures.filter(sig => shouldApplySignature(previewPageIndex, sig.applyMode, sig.customPages)).map(sig => {
+      const placement = getSigPlacement(sig, previewPageIndex)
+      const isActive = activeSigId === sig.id
+      const sigIndex = signatures.findIndex(s => s.id === sig.id);
+      
+      return (
+        <div 
+          key={sig.id}
+          className="absolute transition-opacity duration-75 z-20"
+          style={{
+            left: `${placement.x}%`,
+            top: `${placement.y}%`,
+            transform: 'translate(-50%, -50%)',
+            opacity: placement.opacity / 100,
+            pointerEvents: 'none'
+          }}
+        >
+          <div className="relative pointer-events-auto group" onPointerDown={(e) => { e.stopPropagation(); handlePointerDownSig(ctx, sig.id); }}>
+            {sig.mode === 'text' ? (
+              <span style={{ fontFamily: sig.font, color: sig.color, fontSize: `${(placement.scale / 100) * 3}rem`, whiteSpace: 'nowrap', display: 'block', padding: '4px' }}>
+                {sig.text || ' '}
+              </span>
+            ) : sig.imageUrl ? (
+              <img src={sig.imageUrl} alt="Sig" style={{ width: `${placement.scale * 3}px` }} className="mix-blend-multiply block pointer-events-none" />
+            ) : (
+              <div style={{ width: `${placement.scale * 3}px`, height: '40px' }} /> 
+            )}
+            
+            <div className={`absolute inset-0 border-2 border-dashed ${(isDraggingSig || resizingState?.sigId === sig.id) && draggingContext === ctx && isActive ? 'border-blue-500 bg-blue-500/10' : isActive ? 'border-blue-300' : 'border-transparent group-hover:border-slate-300'} rounded pointer-events-none transition-colors`} />
+            
+            {isActive && (
+               <div className="absolute -top-10 right-0 z-30 flex items-center gap-1">
+                  <div className="px-2 py-1.5 bg-[#6384A3] text-white text-[10px] font-bold rounded shadow-lg pointer-events-none uppercase tracking-widest whitespace-nowrap">
+                    Sig {sigIndex + 1}
+                  </div>
+                  <button 
+                    onPointerDown={(e) => { e.stopPropagation(); setOpenMenuSigId(openMenuSigId === sig.id ? null : sig.id); }} 
+                    className="p-1.5 bg-white text-slate-700 hover:bg-slate-50 border border-slate-200 rounded shadow-lg pointer-events-auto transition-colors"
+                  >
+                    <MoreVertical className="w-4 h-4" />
+                  </button>
+                  
+                  {openMenuSigId === sig.id && (
+                    <div className="absolute top-full right-0 mt-1 w-48 bg-white rounded-lg shadow-xl border border-slate-200 overflow-hidden flex flex-col py-1 pointer-events-auto">
+                      <button 
+                        onPointerDown={(e) => { e.stopPropagation(); syncPlacementToAllPages(sig.id, previewPageIndex); setOpenMenuSigId(null); }} 
+                        className="px-3 py-2 text-[10px] font-bold text-slate-700 uppercase tracking-widest hover:bg-slate-50 text-left flex items-center gap-2"
+                      >
+                        <Layers className="w-3.5 h-3.5" /> Apply on all pages
+                      </button>
+                      <button 
+                        onPointerDown={(e) => { e.stopPropagation(); addNewSignature(); setOpenMenuSigId(null); }} 
+                        className="px-3 py-2 text-[10px] font-bold text-slate-700 uppercase tracking-widest hover:bg-slate-50 text-left flex items-center gap-2 border-t border-slate-100"
+                      >
+                        <Plus className="w-3.5 h-3.5" /> Add more signature
+                      </button>
+                      <button 
+                        onPointerDown={(e) => { e.stopPropagation(); removeSignature(sig.id); setOpenMenuSigId(null); }} 
+                        className="px-3 py-2 text-[10px] font-bold text-red-600 uppercase tracking-widest hover:bg-red-50 text-left flex items-center gap-2 border-t border-slate-100"
+                      >
+                        <Trash className="w-3.5 h-3.5" /> Delete signature
+                      </button>
+                    </div>
+                  )}
+               </div>
+            )}
+            
+            {isActive && (
+              <>
+                <div className="absolute -top-3 -left-3 w-6 h-6 lg:w-4 lg:h-4 bg-white border-2 border-blue-500 rounded-full cursor-nwse-resize pointer-events-auto transition-opacity" onPointerDown={(e) => handleResizeDown(e, 'tl', ctx, sig.id)} />
+                <div className="absolute -top-3 -right-3 w-6 h-6 lg:w-4 lg:h-4 bg-white border-2 border-blue-500 rounded-full cursor-nesw-resize pointer-events-auto transition-opacity" onPointerDown={(e) => handleResizeDown(e, 'tr', ctx, sig.id)} />
+                <div className="absolute -bottom-3 -left-3 w-6 h-6 lg:w-4 lg:h-4 bg-white border-2 border-blue-500 rounded-full cursor-nesw-resize pointer-events-auto transition-opacity" onPointerDown={(e) => handleResizeDown(e, 'bl', ctx, sig.id)} />
+                <div className="absolute -bottom-3 -right-3 w-6 h-6 lg:w-4 lg:h-4 bg-white border-2 border-blue-500 rounded-full cursor-nwse-resize pointer-events-auto transition-opacity" onPointerDown={(e) => handleResizeDown(e, 'br', ctx, sig.id)} />
+              </>
+            )}
+          </div>
         </div>
-      </div>
-    )
+      )
+    })
   }
 
   const renderPaginationOverlay = () => {
@@ -661,118 +927,144 @@ export default function PdfEditor() {
   }
 
   const renderSignatureControls = (context: 'sidebar' | 'modal') => {
-    const currentPlacement = getSigPlacement(previewPageIndex)
     return (
       <div className="space-y-4 animate-in fade-in w-full">
-        <div className="flex bg-slate-100 p-1 rounded">
-          <button onClick={() => setSignature(s => ({ ...s, mode: 'text' }))} className={`flex-1 py-1 text-[10px] font-bold uppercase tracking-widest rounded ${signature.mode === 'text' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}>Text</button>
-          <button onClick={() => setSignature(s => ({ ...s, mode: 'image' }))} className={`flex-1 py-1 text-[10px] font-bold uppercase tracking-widest rounded ${signature.mode === 'image' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}>Image</button>
-        </div>
-
-        {signature.mode === 'text' && (
-          <div className="space-y-3">
-            <input type="text" value={signature.text} onChange={(e) => setSignature(s => ({ ...s, text: e.target.value }))} className="w-full p-2 border border-slate-200 rounded text-sm bg-white" placeholder="Type name..." />
-            <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-1">
-                <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block">Font Style</label>
-                <CustomDropdown 
-                  value={signature.font} 
-                  onChange={(val) => setSignature(s => ({ ...s, font: val }))} 
-                  options={[
-                    { value: 'Brush Script MT, cursive', label: 'Cursive' },
-                    { value: 'Arial, sans-serif', label: 'Arial' },
-                    { value: 'Times New Roman, serif', label: 'Times' },
-                    { value: 'Courier New, monospace', label: 'Typewriter' }
-                  ]} 
-                />
+        {signatures.map((sig, sigIndex) => {
+          const currentPlacement = getSigPlacement(sig, previewPageIndex)
+          return (
+            <div key={sig.id} className={`border rounded-lg overflow-hidden transition-all ${activeSigId === sig.id ? 'border-[#6384A3] shadow-sm' : 'border-slate-200'}`}>
+              <div 
+                className={`p-3 flex justify-between items-center cursor-pointer ${activeSigId === sig.id ? 'bg-blue-50' : 'bg-slate-50 hover:bg-slate-100'}`}
+                onClick={() => setActiveSigId(sig.id)}
+              >
+                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-700">
+                  Signature {sigIndex + 1}
+                </span>
+                <button onClick={(e) => { e.stopPropagation(); removeSignature(sig.id); }} className="text-slate-400 hover:text-red-500">
+                  <X className="w-3.5 h-3.5" />
+                </button>
               </div>
-              <div className="space-y-1">
-                <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block">Text Color</label>
-                <div className="flex items-center justify-between gap-2 bg-white border border-slate-200 rounded p-1 h-9">
-                  <input type="color" value={signature.color} onChange={(e) => setSignature(s => ({ ...s, color: e.target.value }))} className="w-6 h-6 rounded cursor-pointer border-0 bg-transparent p-0 flex-shrink-0" />
-                  <span className="text-[10px] font-mono font-bold text-slate-500 truncate">{signature.color.toUpperCase()}</span>
+              
+              {activeSigId === sig.id && (
+                <div className="p-3 bg-white space-y-4 border-t border-slate-100">
+                  <div className="flex bg-slate-100 p-1 rounded">
+                    <button onClick={() => updateSignature(sig.id, { mode: 'text' })} className={`flex-1 py-1 text-[10px] font-bold uppercase tracking-widest rounded ${sig.mode === 'text' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}>Text</button>
+                    <button onClick={() => updateSignature(sig.id, { mode: 'image' })} className={`flex-1 py-1 text-[10px] font-bold uppercase tracking-widest rounded ${sig.mode === 'image' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}>Image</button>
+                  </div>
+
+                  {sig.mode === 'text' && (
+                    <div className="space-y-3">
+                      <input type="text" value={sig.text} onChange={(e) => updateSignature(sig.id, { text: e.target.value })} className="w-full p-2 border border-slate-200 rounded text-sm bg-white" placeholder="Type name..." />
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block">Font Style</label>
+                          <CustomDropdown 
+                            value={sig.font} 
+                            onChange={(val) => updateSignature(sig.id, { font: val })} 
+                            options={[
+                              { value: 'Brush Script MT, cursive', label: 'Cursive' },
+                              { value: 'Arial, sans-serif', label: 'Arial' },
+                              { value: 'Times New Roman, serif', label: 'Times' },
+                              { value: 'Courier New, monospace', label: 'Typewriter' }
+                            ]} 
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block">Text Color</label>
+                          <div className="flex items-center justify-between gap-2 bg-white border border-slate-200 rounded p-1 h-9">
+                            <input type="color" value={sig.color} onChange={(e) => updateSignature(sig.id, { color: e.target.value })} className="w-6 h-6 rounded cursor-pointer border-0 bg-transparent p-0 flex-shrink-0" />
+                            <span className="text-[10px] font-mono font-bold text-slate-500 truncate">{sig.color.toUpperCase()}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {sig.mode === 'image' && (
+                    <div className="space-y-3">
+                      <button onClick={() => document.getElementById(`sig-upload-${sig.id}`)?.click()} className="w-full py-2 bg-slate-50 border border-slate-200 text-slate-600 font-bold text-[10px] uppercase tracking-widest rounded hover:bg-slate-100 flex items-center justify-center gap-2">
+                        <ImageIcon className="w-3 h-3" /> Upload Image
+                      </button>
+                      <input type="file" id={`sig-upload-${sig.id}`} accept="image/*" className="hidden" onChange={(e) => handleSigImageUpload(sig.id, e)} />
+                      
+                      {sig.imageUrl && (
+                        <div className="space-y-2 mt-2">
+                          <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block">AI Model</label>
+                          <CustomDropdown 
+                            value={sigBgModel} 
+                            onChange={setSigBgModel} 
+                            direction="up"
+                            options={[
+                              { value: 'briaai/RMBG-1.4', label: 'Light AI (Best for Objects & Products)' },
+                              { value: 'isnet_fp16', label: 'Standard AI (Best for People & Faces)' },
+                              { value: 'isnet', label: 'Max Detail AI (Best for Hair & Edges)' }
+                            ]} 
+                          />
+                          <div className="grid grid-cols-2 gap-2 pt-1">
+                            <button onClick={() => handleRemoveSigBg(sig.id, sig.imageUrl!)} disabled={isProcessing} className="py-2 bg-[#6384A3]/10 text-[#6384A3] border border-[#6384A3]/20 font-bold text-[9px] uppercase tracking-widest rounded hover:bg-[#6384A3]/20 transition-colors">
+                              Remove BG
+                            </button>
+                            <button onClick={() => handleEnhanceSig(sig.id, sig.imageUrl!)} disabled={isProcessing} className="py-2 bg-indigo-50 text-indigo-700 border border-indigo-200 font-bold text-[9px] uppercase tracking-widest rounded hover:bg-indigo-100 transition-colors flex justify-center items-center gap-1">
+                              <Sparkles className="w-3 h-3" /> Enhance Ink
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Positioning & Scale */}
+                  <div className="space-y-3 pt-2 border-t border-slate-100">
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[9px] font-bold text-slate-500 uppercase tracking-widest">
+                        <span>Scale (Page {previewPageIndex + 1})</span><span>{Math.round(currentPlacement.scale)}%</span>
+                      </div>
+                      <input type="range" min="10" max="200" value={currentPlacement.scale} onChange={(e) => updateSigPlacement(sig.id, previewPageIndex, { scale: Number(e.target.value) })} className="w-full accent-[#6384A3]" />
+                    </div>
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[9px] font-bold text-slate-500 uppercase tracking-widest">
+                        <span>Opacity (Page {previewPageIndex + 1})</span><span>{currentPlacement.opacity}%</span>
+                      </div>
+                      <input type="range" min="10" max="100" value={currentPlacement.opacity} onChange={(e) => updateSigPlacement(sig.id, previewPageIndex, { opacity: Number(e.target.value) })} className="w-full accent-[#6384A3]" />
+                    </div>
+                    
+                    <div className="space-y-1 pt-2">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Apply To</label>
+                      <CustomDropdown 
+                        value={sig.applyMode} 
+                        onChange={(val) => updateSignature(sig.id, { applyMode: val as 'all' | 'custom' })} 
+                        direction="up"
+                        options={[
+                          { value: 'all', label: 'All Pages' },
+                          { value: 'custom', label: 'Custom Pages' }
+                        ]} 
+                      />
+                      {sig.applyMode === 'custom' && (
+                        <input 
+                          type="text" 
+                          placeholder="e.g. 1-3, 5, 8" 
+                          value={sig.customPages} 
+                          onChange={(e) => updateSignature(sig.id, { customPages: e.target.value })} 
+                          className="w-full p-2 mt-2 border border-slate-200 rounded text-sm bg-white" 
+                        />
+                      )}
+                    </div>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
-          </div>
+          )
+        })}
+
+        <button onClick={addNewSignature} className="w-full py-2.5 bg-slate-100 border border-slate-200 text-slate-600 font-bold text-[10px] uppercase tracking-widest rounded hover:bg-slate-200 flex items-center justify-center gap-2">
+          <Plus className="w-3.5 h-3.5" /> Add Another Signature
+        </button>
+
+        {context === 'sidebar' && signatures.length > 0 && (
+          <button onClick={() => setShowSigModal(true)} disabled={pages.length === 0} className="w-full py-2.5 bg-slate-800 text-white font-bold text-[10px] uppercase tracking-widest rounded-lg hover:bg-black transition-colors shadow-sm flex items-center justify-center gap-2">
+            <Move className="w-3.5 h-3.5" /> Open Full Screen
+          </button>
         )}
-
-        {signature.mode === 'image' && (
-          <div className="space-y-3">
-            <button onClick={() => document.getElementById('sig-upload')?.click()} className="w-full py-2 bg-slate-50 border border-slate-200 text-slate-600 font-bold text-[10px] uppercase tracking-widest rounded hover:bg-slate-100 flex items-center justify-center gap-2">
-              <ImageIcon className="w-3 h-3" /> Upload Signature Image
-            </button>
-            <input type="file" id="sig-upload" accept="image/*" className="hidden" onChange={handleSigImageUpload} />
-            
-            {signature.imageUrl && (
-              <div className="space-y-2 mt-2">
-                <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block">AI Model</label>
-                <CustomDropdown 
-                  value={sigBgModel} 
-                  onChange={setSigBgModel} 
-                  direction="up"
-                  options={[
-                    { value: 'briaai/RMBG-1.4', label: 'Pro AI (Best for Objects)' },
-                    { value: 'isnet_fp16', label: 'Standard AI (Faster)' },
-                    { value: 'isnet', label: 'Max Detail AI (Best for Edges)' }
-                  ]} 
-                />
-                <div className="grid grid-cols-2 gap-2 pt-1">
-                  <button onClick={handleRemoveSigBg} disabled={isProcessing} className="py-2 bg-[#6384A3]/10 text-[#6384A3] border border-[#6384A3]/20 font-bold text-[9px] uppercase tracking-widest rounded hover:bg-[#6384A3]/20 transition-colors">
-                    Remove BG
-                  </button>
-                  <button onClick={handleEnhanceSig} disabled={isProcessing} className="py-2 bg-indigo-50 text-indigo-700 border border-indigo-200 font-bold text-[9px] uppercase tracking-widest rounded hover:bg-indigo-100 transition-colors flex justify-center items-center gap-1">
-                    <Sparkles className="w-3 h-3" /> Enhance Ink
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Universal Sig Controls */}
-        <div className="space-y-3 pt-2 border-t border-slate-100">
-          <div className="space-y-1">
-            <div className="flex justify-between text-[9px] font-bold text-slate-500 uppercase tracking-widest">
-              <span>Scale (Page {previewPageIndex + 1})</span><span>{Math.round(currentPlacement.scale)}%</span>
-            </div>
-            <input type="range" min="10" max="200" value={currentPlacement.scale} onChange={(e) => updateSigPlacement(previewPageIndex, { scale: Number(e.target.value) })} className="w-full accent-[#6384A3]" />
-          </div>
-          <div className="space-y-1">
-            <div className="flex justify-between text-[9px] font-bold text-slate-500 uppercase tracking-widest">
-              <span>Opacity (Page {previewPageIndex + 1})</span><span>{currentPlacement.opacity}%</span>
-            </div>
-            <input type="range" min="10" max="100" value={currentPlacement.opacity} onChange={(e) => updateSigPlacement(previewPageIndex, { opacity: Number(e.target.value) })} className="w-full accent-[#6384A3]" />
-          </div>
-          
-          <div className="space-y-1 pt-2">
-            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Apply To</label>
-            <CustomDropdown 
-              value={signature.applyMode} 
-              onChange={(val) => setSignature(s => ({ ...s, applyMode: val as 'all' | 'custom' }))} 
-              direction="up"
-              options={[
-                { value: 'all', label: 'All Pages' },
-                { value: 'custom', label: 'Custom Pages' }
-              ]} 
-            />
-            {signature.applyMode === 'custom' && (
-              <input 
-                type="text" 
-                placeholder="e.g. 1-3, 5, 8" 
-                value={signature.customPages} 
-                onChange={(e) => setSignature(s => ({ ...s, customPages: e.target.value }))} 
-                className="w-full p-2 mt-2 border border-slate-200 rounded text-sm bg-white" 
-              />
-            )}
-          </div>
-
-          {context === 'sidebar' && (
-            <button onClick={() => setShowSigModal(true)} disabled={pages.length === 0 || (signature.mode === 'image' && !signature.imageUrl)} className="w-full py-2.5 bg-slate-800 text-white font-bold text-[10px] uppercase tracking-widest rounded-lg hover:bg-black transition-colors shadow-sm flex items-center justify-center gap-2">
-              <Move className="w-3.5 h-3.5" /> Open Full Screen
-            </button>
-          )}
-        </div>
       </div>
     )
   }
@@ -824,8 +1116,8 @@ export default function PdfEditor() {
     ctx.setTransform(1, 0, 0, 1, 0, 0)
     ctx.filter = 'none'
 
-    // Clean Scan (Thresholding)
-    if (cleanWatermarks || page.cleanBackground) {
+    // Clean Scan (Thresholding - Global Only)
+    if (cleanWatermarks) {
       const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
       const data = imgData.data
       for (let j = 0; j < data.length; j += 4) {
@@ -853,29 +1145,33 @@ export default function PdfEditor() {
       ctx.putImageData(imgData, 0, 0)
     }
 
-    // Signature
-    if (!skipSignature && signature.enabled && shouldApplySignature(index, signature.applyMode, signature.customPages)) {
-      const placement = getSigPlacement(index)
-      ctx.save()
-      ctx.globalAlpha = placement.opacity / 100
-      const sigX = (placement.x / 100) * canvas.width
-      const sigY = (placement.y / 100) * canvas.height
+    // Signatures Overlay
+    if (!skipSignature) {
+      for (const sig of signatures) {
+        if (shouldApplySignature(index, sig.applyMode, sig.customPages)) {
+          const placement = getSigPlacement(sig, index)
+          ctx.save()
+          ctx.globalAlpha = placement.opacity / 100
+          const sigX = (placement.x / 100) * canvas.width
+          const sigY = (placement.y / 100) * canvas.height
 
-      if (signature.mode === 'text' && signature.text) {
-        const fontSize = (placement.scale / 100) * canvas.width * 0.1
-        ctx.font = `${fontSize}px ${signature.font}`
-        ctx.fillStyle = signature.color
-        ctx.textAlign = 'center'
-        ctx.textBaseline = 'middle'
-        ctx.fillText(signature.text, sigX, sigY)
-      } else if (signature.mode === 'image' && signature.imageUrl) {
-        const sigImg = await createImage(signature.imageUrl)
-        const baseSigWidth = canvas.width * 0.3
-        const drawWidth = baseSigWidth * (placement.scale / 50)
-        const drawHeight = (sigImg.height / sigImg.width) * drawWidth
-        ctx.drawImage(sigImg, sigX - drawWidth / 2, sigY - drawHeight / 2, drawWidth, drawHeight)
+          if (sig.mode === 'text' && sig.text) {
+            const fontSize = (placement.scale / 100) * canvas.width * 0.1
+            ctx.font = `${fontSize}px ${sig.font}`
+            ctx.fillStyle = sig.color
+            ctx.textAlign = 'center'
+            ctx.textBaseline = 'middle'
+            ctx.fillText(sig.text, sigX, sigY)
+          } else if (sig.mode === 'image' && sig.imageUrl) {
+            const sigImg = await createImage(sig.imageUrl)
+            const baseSigWidth = canvas.width * 0.3
+            const drawWidth = baseSigWidth * (placement.scale / 50)
+            const drawHeight = (sigImg.height / sigImg.width) * drawWidth
+            ctx.drawImage(sigImg, sigX - drawWidth / 2, sigY - drawHeight / 2, drawWidth, drawHeight)
+          }
+          ctx.restore()
+        }
       }
-      ctx.restore()
     }
 
     // Page Numbers
@@ -954,6 +1250,7 @@ export default function PdfEditor() {
   const exportAsWord = async () => {
     setIsProcessing(true)
     setLoadingText('Building Word Document...')
+    await new Promise(r => setTimeout(r, 50))
     try {
       let htmlContent = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
       <head><meta charset='utf-8'><title>Exported Doc</title></head><body>`
@@ -973,6 +1270,7 @@ export default function PdfEditor() {
       link.href = URL.createObjectURL(blob)
       link.download = `${originalDocName}_zs_converter.doc`
       link.click()
+      showToast('Word document exported')
     } catch(e) {
       alert("Word export failed.")
     } finally {
@@ -986,6 +1284,7 @@ export default function PdfEditor() {
     
     setIsProcessing(true)
     setLoadingText('Splitting PDF...')
+    await new Promise(r => setTimeout(r, 50))
     try {
       const ranges = splitRanges.split(',').map(r => r.trim())
       const zip = new JSZip()
@@ -1023,6 +1322,7 @@ export default function PdfEditor() {
       link.href = URL.createObjectURL(zipContent)
       link.download = `${originalDocName}_splits_zs_converter.zip`
       link.click()
+      showToast('Split PDF downloaded')
     } catch (e) {
       alert("Split operation failed. Please check your range formatting.")
     } finally {
@@ -1044,6 +1344,7 @@ export default function PdfEditor() {
   const handlePreview = async () => {
     setIsProcessing(true)
     setLoadingText('Generating Preview...')
+    await new Promise(r => setTimeout(r, 50))
     try {
       const blob = await generatePdfBlob()
       if (blob) setPreviewUrl(URL.createObjectURL(blob))
@@ -1058,6 +1359,7 @@ export default function PdfEditor() {
   const exportAsPdf = async () => {
     setIsProcessing(true)
     setLoadingText('Saving Document...')
+    await new Promise(r => setTimeout(r, 50))
     try {
       const blob = await generatePdfBlob()
       if (blob) {
@@ -1066,6 +1368,7 @@ export default function PdfEditor() {
         link.href = url
         link.download = `${originalDocName}_zs_converter.pdf`
         link.click()
+        showToast('PDF exported successfully')
       }
     } catch (e) {
       alert("Failed to save PDF.")
@@ -1079,6 +1382,7 @@ export default function PdfEditor() {
     if (pages.length === 0) return
     setIsProcessing(true)
     setLoadingText('Zipping images...')
+    await new Promise(r => setTimeout(r, 50))
     try {
       const zip = new JSZip()
       for (let i = 0; i < pages.length; i++) {
@@ -1093,6 +1397,7 @@ export default function PdfEditor() {
       link.href = downloadUrl
       link.download = `${originalDocName}_images_zs_converter.zip`
       link.click()
+      showToast('Images zip downloaded')
     } catch (error) {
       alert("Failed to export images.")
     } finally {
@@ -1164,16 +1469,7 @@ export default function PdfEditor() {
               </button>
               {activePanel === 'signature' && (
                 <div className="p-4 space-y-4 border-t border-slate-100 rounded-b-lg">
-                  <label className="flex items-center gap-2 text-xs font-bold text-slate-700 uppercase tracking-wider cursor-pointer border-b border-slate-100 pb-3">
-                    <input type="checkbox" checked={signature.enabled} onChange={(e) => setSignature(s => ({ ...s, enabled: e.target.checked }))} className="w-4 h-4 accent-[#6384A3] rounded" />
-                    Enable Signature
-                  </label>
-
-                  {signature.enabled && (
-                    <div className="space-y-4 animate-in fade-in">
-                      {renderSignatureControls('sidebar')}
-                    </div>
-                  )}
+                  {renderSignatureControls('sidebar')}
                 </div>
               )}
             </div>
@@ -1186,13 +1482,13 @@ export default function PdfEditor() {
               {activePanel === 'enhance' && (
                 <div className="p-4 space-y-4 border-t border-slate-100 rounded-b-lg">
                   <label className="flex items-start gap-2 text-xs font-bold text-slate-700 cursor-pointer">
-                    <input type="checkbox" checked={cleanWatermarks} onChange={(e) => setCleanWatermarks(e.target.checked)} className="w-4 h-4 mt-0.5 accent-[#6384A3] rounded" />
+                    <input type="checkbox" checked={cleanWatermarks} onChange={(e) => { setCleanWatermarks(e.target.checked); showToast(e.target.checked ? 'Global scan cleaner enabled' : 'Global scan cleaner disabled'); }} className="w-4 h-4 mt-0.5 accent-[#6384A3] rounded" />
                     <div>
                       <span className="uppercase tracking-wider">Remove Faint Watermarks</span>
                       <p className="text-[9px] text-slate-400 font-normal mt-1 leading-tight">Washes out light colors, shadows, and faint watermarks while preserving dark text for scanned documents globally.</p>
                     </div>
                   </label>
-                  <p className="text-[10px] text-[#6384A3] font-bold mt-2 pt-2 border-t border-slate-100">Pro Tip: Click the Edit icon on a specific page thumbnail for local enhancements.</p>
+                  <p className="text-[10px] text-[#6384A3] font-bold mt-2 pt-2 border-t border-slate-100">Pro Tip: Click the Edit icon on a specific page thumbnail for local AI background removal.</p>
                 </div>
               )}
             </div>
@@ -1393,13 +1689,13 @@ export default function PdfEditor() {
               <h3 className="text-sm font-bold text-slate-700">Drag & drop PDFs or Images here</h3>
               <p className="text-xs text-slate-500 mt-1">Pro Tip: Drop multiple files to merge them</p>
             </div>
-          ) : activePanel === 'signature' && signature.enabled && pages.length > 0 && sigPageTarget ? (
+          ) : activePanel === 'signature' && pages.length > 0 && sigPageTarget ? (
             // Live Signature Preview & Positioning (Right Side)
             <div className="flex-1 flex flex-col bg-slate-100 rounded-xl border border-slate-200 relative select-none animate-in fade-in h-full min-h-[400px] overflow-hidden">
               
               {/* Top Action Badges (Z-50) */}
               <div className="absolute top-3 left-3 z-50 bg-white/90 px-3 py-1.5 rounded shadow-sm text-[10px] font-bold text-slate-600 uppercase tracking-widest flex items-center gap-2 border border-slate-200 pointer-events-none">
-                <Move className="w-3.5 h-3.5" /> Drag or Resize Signature
+                <Move className="w-3.5 h-3.5" /> Select & Drag Signature
               </div>
 
               <div className="absolute top-3 right-3 z-50 pointer-events-auto">
@@ -1422,7 +1718,7 @@ export default function PdfEditor() {
                       <div key={p.id} onClick={() => { setPreviewPageIndex(idx); setShowViewerGrid(false); }} className={`cursor-pointer border-2 rounded-lg overflow-hidden aspect-[3/4] relative transition-colors bg-white shadow-sm ${previewPageIndex === idx ? 'border-[#6384A3] ring-2 ring-[#6384A3]/30' : 'border-transparent hover:border-slate-300'}`}>
                         <img src={p.url} alt={`Thumb ${idx+1}`} className="w-full h-full object-contain" style={{ transform: `rotate(${p.rotation + p.fineRotation}deg)` }} />
                         <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded">Page {idx + 1}</div>
-                        {signature.enabled && shouldApplySignature(idx, signature.applyMode, signature.customPages) && (
+                        {signatures.some(sig => shouldApplySignature(idx, sig.applyMode, sig.customPages)) && (
                           <div className="absolute top-1 right-1 bg-[#6384A3] text-white text-[9px] px-1.5 py-0.5 rounded shadow">Signed</div>
                         )}
                       </div>
@@ -1431,8 +1727,8 @@ export default function PdfEditor() {
                 ) : (
                   <div
                     ref={rightSideSigRef}
-                    className="relative shadow-none bg-slate-50touch-none inline-flex max-w-full max-h-full"
-                    onPointerDown={() => handlePointerDownSig('right')}
+                    className="relative shadow-none bg-slate-50 touch-none inline-flex max-w-full max-h-full"
+                    onPointerDown={() => setOpenMenuSigId(null)}
                     onPointerMove={handlePointerMoveSig}
                     onPointerUp={handlePointerUpSig}
                     onPointerLeave={handlePointerUpSig}
@@ -1479,7 +1775,6 @@ export default function PdfEditor() {
                         brightness={page.brightness}
                         contrast={page.contrast}
                         grayscale={page.grayscale}
-                        cleanBackground={page.cleanBackground}
                         onRemove={removePage} 
                         onRotate={rotatePage}
                         onEdit={setEditingPageId}
@@ -1495,16 +1790,6 @@ export default function PdfEditor() {
                   </div>
                 </SortableContext>
               </DndContext>
-            </div>
-          )}
-
-          {isProcessing && (
-            <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center z-50 rounded-xl">
-              <svg className="animate-spin w-8 h-8 text-[#6384A3] mb-4" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-              </svg>
-              <p className="text-xs font-bold text-slate-800 uppercase tracking-widest">{loadingText}</p>
             </div>
           )}
         </div>
@@ -1552,7 +1837,7 @@ export default function PdfEditor() {
                      <div key={p.id} onClick={() => { setPreviewPageIndex(idx); setShowViewerGrid(false); }} className={`cursor-pointer border-2 rounded-lg overflow-hidden aspect-[3/4] relative transition-colors bg-white shadow-xl ${previewPageIndex === idx ? 'border-blue-400 ring-2 ring-blue-400' : 'border-transparent hover:border-slate-500'}`}>
                        <img src={p.url} alt={`Thumb ${idx+1}`} className="w-full h-full object-contain bg-slate-800" style={{ transform: `rotate(${p.rotation + p.fineRotation}deg)` }} />
                        <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded">Page {idx + 1}</div>
-                       {signature.enabled && shouldApplySignature(idx, signature.applyMode, signature.customPages) && (
+                       {signatures.some(sig => shouldApplySignature(idx, sig.applyMode, sig.customPages)) && (
                          <div className="absolute top-1 right-1 bg-blue-500 text-white text-[9px] px-1.5 py-0.5 rounded shadow">Signed</div>
                        )}
                      </div>
@@ -1563,7 +1848,7 @@ export default function PdfEditor() {
                    <div 
                      ref={modalSigRef}
                      className="relative shadow-2xl bg-white touch-none inline-block"
-                     onPointerDown={() => handlePointerDownSig('modal')}
+                     onPointerDown={() => setOpenMenuSigId(null)}
                      onPointerMove={handlePointerMoveSig}
                      onPointerUp={handlePointerUpSig}
                      onPointerLeave={handlePointerUpSig}
@@ -1622,7 +1907,7 @@ export default function PdfEditor() {
                      className="w-full h-full object-contain max-w-none max-h-none pointer-events-none" 
                      style={{ 
                        transform: `rotate(${editingPageData.rotation + editingPageData.fineRotation}deg) scale(${editingPageData.scale || 1})`,
-                       filter: `brightness(${editingPageData.brightness}%) contrast(${editingPageData.contrast}%) ${editingPageData.grayscale ? 'grayscale(100%)' : ''} ${editingPageData.cleanBackground ? 'contrast(150%) brightness(110%)' : ''}`.trim()
+                       filter: `brightness(${editingPageData.brightness}%) contrast(${editingPageData.contrast}%) ${editingPageData.grayscale ? 'grayscale(100%)' : ''}`.trim()
                      }} 
                      alt="Editing preview"
                    />
@@ -1677,11 +1962,17 @@ export default function PdfEditor() {
                 <h4 className="text-[10px] font-bold text-slate-800 uppercase tracking-widest mb-3">Enhancements (This Page)</h4>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Brightness</label>
+                    <div className="flex justify-between text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-2">
+                      <span>Brightness</span>
+                      <span className="text-[#6384A3]">{editingPageData.brightness}%</span>
+                    </div>
                     <input type="range" min="50" max="150" value={editingPageData.brightness} onChange={(e) => updatePageAttributes(editingPageData.id, { brightness: Number(e.target.value) })} className="w-full accent-[#6384A3]" />
                   </div>
                   <div>
-                    <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Contrast</label>
+                    <div className="flex justify-between text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-2">
+                      <span>Contrast</span>
+                      <span className="text-[#6384A3]">{editingPageData.contrast}%</span>
+                    </div>
                     <input type="range" min="50" max="150" value={editingPageData.contrast} onChange={(e) => updatePageAttributes(editingPageData.id, { contrast: Number(e.target.value) })} className="w-full accent-[#6384A3]" />
                   </div>
                 </div>
@@ -1691,36 +1982,69 @@ export default function PdfEditor() {
                     <input type="checkbox" checked={editingPageData.grayscale} onChange={(e) => updatePageAttributes(editingPageData.id, { grayscale: e.target.checked })} className="w-3.5 h-3.5 accent-[#6384A3] rounded" />
                     Black & White (Grayscale)
                   </label>
-                  <label className="flex items-center gap-2 text-[10px] font-bold text-slate-700 uppercase tracking-widest cursor-pointer">
-                    <input type="checkbox" checked={editingPageData.cleanBackground} onChange={(e) => updatePageAttributes(editingPageData.id, { cleanBackground: e.target.checked })} className="w-3.5 h-3.5 accent-[#6384A3] rounded" />
-                    Clean Scan Background (Wash Faint Colors)
-                  </label>
+                </div>
+
+                <div className="pt-4 border-t border-slate-100 mt-4 space-y-2">
+                  <label className="text-[10px] font-bold text-slate-700 uppercase tracking-widest block">AI Background Removal</label>
+                  <CustomDropdown 
+                    value={pageBgModel} 
+                    onChange={setPageBgModel} 
+                    direction="up"
+                    options={[
+                      { value: 'briaai/RMBG-1.4', label: 'Light' },
+                      { value: 'isnet_fp16', label: 'Standard ' },
+                      { value: 'isnet', label: 'Max' }
+                    ]} 
+                  />
+                  <button 
+                    onClick={() => handleRemovePageBg(editingPageData.id, editingPageData.url)} 
+                    disabled={isProcessing} 
+                    className="w-full py-2 bg-[#6384A3]/10 text-[#6384A3] border border-[#6384A3]/20 font-bold text-[9px] uppercase tracking-widest rounded hover:bg-[#6384A3]/20 transition-colors flex items-center justify-center gap-2"
+                  >
+                    <Wand2 className="w-3 h-3" /> Remove Background
+                  </button>
                 </div>
               </div>
 
-              <div className="flex gap-2 pt-2 border-t border-slate-100">
-                <button onClick={() => updatePageAttributes(editingPageData.id, { fineRotation: 0, scale: 1, brightness: 100, contrast: 100, grayscale: false, cleanBackground: false })} className="flex-[0.5] py-2.5 px-4 text-xs font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50 uppercase tracking-widest">Reset</button>
-                <button onClick={() => setEditingPageId(null)} className="flex-1 py-2.5 text-xs font-bold text-white bg-[#6384A3] rounded hover:bg-[#4f6a83] uppercase tracking-widest">Done</button>
+              <div className="flex gap-2 pt-4 border-t border-slate-100">
+                <button 
+                  onClick={() => {
+                    updatePageAttributes(editingPageData.id, { url: editingPageData.originalUrl, fineRotation: 0, scale: 1, brightness: 100, contrast: 100, grayscale: false });
+                    showToast('Page reset to original');
+                  }} 
+                  className="flex-[0.5] py-2.5 px-4 text-xs font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50 uppercase tracking-widest"
+                >
+                  Reset
+                </button>
+                <button 
+                  onClick={() => { setEditingPageId(null); showToast('Enhancements applied'); }} 
+                  className="flex-1 py-2.5 text-xs font-bold text-white bg-[#6384A3] rounded hover:bg-[#4f6a83] uppercase tracking-widest"
+                >
+                  Done
+                </button>
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Fullscreen Preview Modal (Light Theme) */}
-      {previewUrl && (
-        <div className="fixed inset-0 z-[120] bg-slate-100/95 backdrop-blur-sm flex flex-col animate-in fade-in zoom-in-95 duration-200">
-          <div className="flex justify-between items-center p-4 bg-white border-b border-slate-200 flex-shrink-0 shadow-sm">
-            <h3 className="text-slate-800 font-bold text-sm uppercase tracking-widest flex items-center gap-2">
-              <Eye className="w-4 h-4 text-[#6384A3]" /> Document Preview
-            </h3>
-            <button onClick={() => setPreviewUrl(null)} className="text-slate-500 hover:text-red-500 transition-colors bg-slate-100 p-2 rounded-full">
-              <X className="w-5 h-5" />
-            </button>
+      {/* Global Application Loading Overlay */}
+      {isProcessing && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex flex-col items-center justify-center z-[200]">
+          <div className="bg-white px-6 py-4 rounded-xl shadow-2xl flex flex-col items-center">
+            <svg className="animate-spin w-8 h-8 text-[#6384A3] mb-3" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <p className="text-xs font-bold text-slate-800 uppercase tracking-widest">{loadingText}</p>
           </div>
-          <div className="flex-1 p-2 md:p-8 flex justify-center">
-            <iframe src={previewUrl} className="w-full max-w-4xl h-full rounded border border-slate-200 shadow-2xl bg-white" title="PDF Preview" />
-          </div>
+        </div>
+      )}
+
+      {/* Toast Notification Container */}
+      {toast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-slate-800 text-white px-4 py-2 rounded-full shadow-2xl z-[300] animate-in slide-in-from-bottom-5 fade-in duration-300 text-xs font-bold uppercase tracking-widest flex items-center gap-2 pointer-events-none">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400" /> {toast.message}
         </div>
       )}
     </>
