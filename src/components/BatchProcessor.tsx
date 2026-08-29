@@ -58,7 +58,7 @@ export default function BatchProcessor() {
   const [presetSize, setPresetSize] = useState('custom')
   
   const [enableBgRemoval, setEnableBgRemoval] = useState(false)
-  const [bgModel, setBgModel] = useState('isnet_quint8')
+  const [bgModel, setBgModel] = useState('briaai/RMBG-1.4')
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     setFiles(prev => [...prev, ...acceptedFiles])
@@ -93,15 +93,102 @@ export default function BatchProcessor() {
     const zip = new JSZip()
 
     try {
+      // Preload HuggingFace models outside the loop to prevent reloading for every image
+      let hfModel: any = null;
+      let hfProcessor: any = null;
+      let HFRawImage: any = null;
+
+      if (enableBgRemoval && bgModel === 'briaai/RMBG-1.4') {
+        try {
+          const { AutoModel, AutoProcessor, RawImage, env } = await import('@huggingface/transformers');
+          env.allowLocalModels = false;
+          
+          hfModel = await AutoModel.from_pretrained(bgModel, {
+            config: { model_type: 'custom' } as any,
+          });
+          
+          hfProcessor = await AutoProcessor.from_pretrained(bgModel, {
+            config: {
+              do_normalize: true,
+              do_pad: false,
+              do_rescale: true,
+              do_resize: true,
+              image_mean: [0.5, 0.5, 0.5],
+              feature_extractor_type: "ImageFeatureExtractor",
+              image_std: [1, 1, 1],
+              resample: 2,
+              rescale_factor: 0.00392156862745098,
+              size: { width: 1024, height: 1024 }
+            } as any
+          });
+          
+          HFRawImage = RawImage;
+        } catch (e) {
+          console.warn("Failed to preload HF model", e);
+        }
+      }
+
       for (let i = 0; i < files.length; i++) {
         const file = files[i]
         let url = URL.createObjectURL(file)
 
         if (enableBgRemoval) {
           const optimized = await optimizeImageForAI(url)
-          const bgConfig: Config = { model: bgModel as any, output: { format: "image/png" } }
-          const imageBlob = await removeBackground(optimized, bgConfig)
-          url = URL.createObjectURL(imageBlob)
+          let removedSuccessfully = false;
+
+          if (bgModel === 'briaai/RMBG-1.4' && hfModel && hfProcessor && HFRawImage) {
+            try {
+              const imageToProcess = await HFRawImage.fromURL(optimized);
+              const { pixel_values } = await hfProcessor(imageToProcess);
+              
+              const outputs = await hfModel({ input: pixel_values });
+              const outTensor = Object.values(outputs)[0] as any;
+              
+              if (!outTensor || !outTensor.data) throw new Error("Invalid tensor output");
+
+              const maskWidth = outTensor.dims[3];
+              const maskHeight = outTensor.dims[2];
+
+              const maskCanvas = document.createElement('canvas');
+              maskCanvas.width = maskWidth;
+              maskCanvas.height = maskHeight;
+              const maskCtx = maskCanvas.getContext('2d');
+              if (!maskCtx) throw new Error("Mask Context failed");
+
+              const imgData = maskCtx.createImageData(maskWidth, maskHeight);
+              for (let j = 0; j < outTensor.data.length; j++) {
+                 const val = Math.max(0, Math.min(255, Math.round(outTensor.data[j] * 255)));
+                 imgData.data[j * 4] = 0;     // R
+                 imgData.data[j * 4 + 1] = 0; // G
+                 imgData.data[j * 4 + 2] = 0; // B
+                 imgData.data[j * 4 + 3] = val; // Alpha
+              }
+              maskCtx.putImageData(imgData, 0, 0);
+
+              const originalImg = await createImage(url);
+              const finalCanvas = document.createElement('canvas');
+              finalCanvas.width = originalImg.width;
+              finalCanvas.height = originalImg.height;
+              const finalCtx = finalCanvas.getContext('2d');
+              if (!finalCtx) throw new Error("Final context failed");
+
+              finalCtx.drawImage(originalImg, 0, 0);
+              finalCtx.globalCompositeOperation = 'destination-in';
+              finalCtx.drawImage(maskCanvas, 0, 0, finalCanvas.width, finalCanvas.height);
+              
+              url = finalCanvas.toDataURL('image/png');
+              removedSuccessfully = true;
+            } catch (hfError) {
+              console.warn("Manual RMBG-1.4 engine failed. Falling back to Imgly...", hfError);
+            }
+          }
+
+          if (!removedSuccessfully) {
+            const fallbackModel = bgModel === 'briaai/RMBG-1.4' ? 'isnet' : bgModel;
+            const bgConfig: Config = { model: fallbackModel as any, output: { format: "image/png" } }
+            const imageBlob = await removeBackground(optimized, bgConfig)
+            url = URL.createObjectURL(imageBlob)
+          }
         }
 
         const img = await createImage(url)
@@ -290,9 +377,9 @@ export default function BatchProcessor() {
                 disabled={isProcessing}
                 direction="up"
                 options={[
-                  { value: 'isnet_quint8', label: 'Light (Best for Batches)' },
-                  { value: 'isnet_fp16', label: 'Medium (Slower)' },
-                  { value: 'isnet', label: 'Heavy (Extremely Slow)' }
+                  { value: 'briaai/RMBG-1.4', label: 'Pro AI (Best for Objects & Products)' },
+                  { value: 'isnet_fp16', label: 'Standard AI (Best for People & Faces)' },
+                  { value: 'isnet', label: 'Maximum Detail AI (Best for Hair & Edges)' }
                 ]}
               />
             </div>

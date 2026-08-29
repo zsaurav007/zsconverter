@@ -83,6 +83,7 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
   const [bgColor, setBgColor] = useState('#ffffff')
   const [bgGradientColor1, setBgGradientColor1] = useState('#6384A3')
   const [bgGradientColor2, setBgGradientColor2] = useState('#feb47b')
+  const [bgGradientDir, setBgGradientDir] = useState<string>('to bottom right')
   const [bgImage, setBgImage] = useState<string | null>(null)
   const [bgImageScale, setBgImageScale] = useState<number>(100) 
 
@@ -94,7 +95,9 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
   const [maintainRatio, setMaintainRatio] = useState(true)
   const [presetSize, setPresetSize] = useState('custom')
 
-  const [exportFormat, setExportFormat] = useState<string>('image/webp')
+  // Set exportFormat exactly to original format by default if valid
+  const validFormats = ['image/png', 'image/webp', 'image/jpeg', 'image/x-icon', 'application/pdf']
+  const [exportFormat, setExportFormat] = useState<string>(validFormats.includes(file.type) ? file.type : 'image/png')
   const [compressionQuality, setCompressionQuality] = useState<number>(85)
 
   const [estimatedSize, setEstimatedSize] = useState<number | null>(null)
@@ -361,7 +364,17 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
       ctx.fillStyle = bgColor
       ctx.fillRect(0, 0, canvasW, canvasH)
     } else if (bgType === 'gradient') {
-      const grad = ctx.createLinearGradient(0, 0, canvasW, canvasH)
+      let x0 = 0, y0 = 0, x1 = canvasW, y1 = canvasH;
+      if (bgGradientDir === 'to bottom') {
+        x1 = 0;
+      } else if (bgGradientDir === 'to right') {
+        y1 = 0;
+      } else if (bgGradientDir === 'to top right') {
+        y0 = canvasH;
+        y1 = 0;
+      }
+      
+      const grad = ctx.createLinearGradient(x0, y0, x1, y1)
       grad.addColorStop(0, bgGradientColor1)
       grad.addColorStop(1, bgGradientColor2)
       ctx.fillStyle = grad
@@ -478,7 +491,7 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
 
     const timer = setTimeout(calculate, 600);
     return () => { isMounted = false; clearTimeout(timer); }
-  }, [currentImage, exportFormat, compressionQuality, bgType, bgColor, bgGradientColor1, bgGradientColor2, bgImage, bgImageScale])
+  }, [currentImage, exportFormat, compressionQuality, bgType, bgColor, bgGradientColor1, bgGradientColor2, bgGradientDir, bgImage, bgImageScale])
 
   const handleExport = async () => {
     const blob = await generateOutputBlob()
@@ -522,7 +535,7 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
         <div className="absolute inset-0 z-0 overflow-hidden flex items-center justify-center" 
           style={{ 
             backgroundColor: bgType === 'color' ? bgColor : 'transparent',
-            backgroundImage: bgType === 'gradient' ? `linear-gradient(135deg, ${bgGradientColor1}, ${bgGradientColor2})` : 'none'
+            backgroundImage: bgType === 'gradient' ? `linear-gradient(${bgGradientDir}, ${bgGradientColor1}, ${bgGradientColor2})` : 'none'
           }}>
           {bgType === 'image' && bgImage && (
             <img src={bgImage} alt="Background" className="w-full h-full object-cover origin-center" style={{ transform: `scale(${bgImageScale / 100})` }} />
@@ -593,15 +606,31 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
                   )}
 
                   {bgType === 'gradient' && (
-                    <div className="flex items-center justify-between gap-2 p-2 bg-slate-50 border border-slate-200 rounded mt-2">
-                      <div className="flex items-center gap-2">
-                        <input type="color" value={bgGradientColor1} onChange={(e) => setBgGradientColor1(e.target.value)} className="w-8 h-8 rounded cursor-pointer p-0 border-0 bg-transparent" />
-                        <span className="font-mono text-[10px] font-bold text-slate-700 uppercase tracking-wider">{bgGradientColor1}</span>
+                    <div className="space-y-3 p-2 bg-slate-50 border border-slate-200 rounded mt-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <input type="color" value={bgGradientColor1} onChange={(e) => setBgGradientColor1(e.target.value)} className="w-8 h-8 rounded cursor-pointer p-0 border-0 bg-transparent" />
+                          <span className="font-mono text-[10px] font-bold text-slate-700 uppercase tracking-wider">{bgGradientColor1}</span>
+                        </div>
+                        <span className="text-slate-400 text-xs font-bold">to</span>
+                        <div className="flex items-center gap-2">
+                          <input type="color" value={bgGradientColor2} onChange={(e) => setBgGradientColor2(e.target.value)} className="w-8 h-8 rounded cursor-pointer p-0 border-0 bg-transparent" />
+                          <span className="font-mono text-[10px] font-bold text-slate-700 uppercase tracking-wider">{bgGradientColor2}</span>
+                        </div>
                       </div>
-                      <span className="text-slate-400 text-xs font-bold">to</span>
-                      <div className="flex items-center gap-2">
-                        <input type="color" value={bgGradientColor2} onChange={(e) => setBgGradientColor2(e.target.value)} className="w-8 h-8 rounded cursor-pointer p-0 border-0 bg-transparent" />
-                        <span className="font-mono text-[10px] font-bold text-slate-700 uppercase tracking-wider">{bgGradientColor2}</span>
+                      <div className="space-y-1">
+                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block">Direction</label>
+                        <CustomDropdown 
+                          value={bgGradientDir} 
+                          onChange={setBgGradientDir} 
+                          direction="up"
+                          options={[
+                            { value: 'to bottom', label: 'Top to Bottom (⬇️)' },
+                            { value: 'to right', label: 'Left to Right (➡️)' },
+                            { value: 'to bottom right', label: 'Top-Left to Bottom-Right (↘️)' },
+                            { value: 'to top right', label: 'Bottom-Left to Top-Right (↗️)' }
+                          ]} 
+                        />
                       </div>
                     </div>
                   )}
