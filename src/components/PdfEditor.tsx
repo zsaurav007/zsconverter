@@ -995,7 +995,7 @@ export default function PdfEditor() {
                             onChange={setSigBgModel} 
                             direction="up"
                             options={[
-                              { value: 'briaai/RMBG-1.4', label: 'Light AI (Best for Objects & Products)' },
+                              { value: 'briaai/RMBG-1.4', label: 'Pro AI (Best for Objects & Products)' },
                               { value: 'isnet_fp16', label: 'Standard AI (Best for People & Faces)' },
                               { value: 'isnet', label: 'Max Detail AI (Best for Hair & Edges)' }
                             ]} 
