@@ -8,7 +8,7 @@ import { removeBackground, Config } from '@imgly/background-removal'
 import { DndContext, closestCenter, TouchSensor, MouseSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, useSortable, rectSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Settings2, Trash2, Eye, Download, RotateCw, Lock, Unlock, FileText, Type, SlidersHorizontal, X, FileImage, ShieldCheck, Layers, Scissors, Wand2, Hash, Edit3, PenTool, Image as ImageIcon, Sparkles, Move, ChevronLeft, ChevronRight, LayoutGrid, ZoomIn, ZoomOut, Plus, Trash, MoreVertical, CheckCircle2 } from 'lucide-react'
+import { Settings2, Trash2, Eye, Download, RotateCw, Lock, Unlock, FileText, Type, SlidersHorizontal, X, FileImage, ShieldCheck, Layers, Scissors, Wand2, Hash, Edit3, PenTool, Image as ImageIcon, Sparkles, Move, ChevronLeft, ChevronRight, LayoutGrid, ZoomIn, ZoomOut, Plus, Trash, MoreVertical, CheckCircle2, Undo2 } from 'lucide-react'
 import CustomDropdown from './CustomDropdown'
 
 // --- HELPER FUNCTIONS ---
@@ -53,13 +53,15 @@ interface SortableItemProps {
   scale: number
   brightness: number
   contrast: number
+  sharpen: number
   grayscale: boolean
   onRemove: (id: string) => void
   onRotate: (id: string) => void
   onEdit: (id: string) => void
+  onView: (id: string) => void
 }
 
-function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brightness, contrast, grayscale, onRemove, onRotate, onEdit }: SortableItemProps) {
+function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brightness, contrast, sharpen, grayscale, onRemove, onRotate, onEdit, onView }: SortableItemProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
   
   const style = {
@@ -72,7 +74,8 @@ function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brigh
   const imageScale = isRotated ? 0.75 : 1
 
   const g = grayscale ? 'grayscale(100%)' : ''
-  const filterStyle = `brightness(${brightness}%) contrast(${contrast}%) ${g}`.trim()
+  const s = sharpen > 0 ? `url(#sharpen-${id}) ` : ''
+  const filterStyle = `${s}brightness(${brightness}%) contrast(${contrast}%) ${g}`.trim()
 
   return (
     <div 
@@ -80,7 +83,8 @@ function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brigh
       style={style} 
       {...attributes} 
       {...listeners} 
-      className={`relative rounded-lg overflow-hidden border ${isDragging ? 'border-[#6384A3] shadow-2xl scale-105' : 'border-slate-200'} aspect-[3/4] cursor-grab active:cursor-grabbing hover:shadow-md transition-all bg-slate-100 flex items-center justify-center group touch-none`}
+      onClick={() => onView(id)}
+      className={`relative rounded-lg overflow-hidden border ${isDragging ? 'border-[#6384A3] shadow-2xl scale-105' : 'border-slate-200'} aspect-[3/4] cursor-pointer hover:shadow-md transition-all bg-slate-100 flex items-center justify-center group touch-none`}
     >
       <div className="w-full h-full flex items-center justify-center overflow-hidden bg-white">
         <img 
@@ -117,7 +121,7 @@ function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brigh
 
       <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-2 py-0.5 rounded font-bold shadow-sm flex items-center gap-1">
         {index + 1}
-        {(fineRotation !== 0 || scale !== 1 || brightness !== 100 || grayscale) && <span className="text-[#6384A3] ml-1">Edited</span>}
+        {(fineRotation !== 0 || scale !== 1 || brightness !== 100 || contrast !== 100 || sharpen > 0 || grayscale) && <span className="text-[#6384A3] ml-1">Edited</span>}
       </div>
     </div>
   )
@@ -134,6 +138,7 @@ type PageItem = {
   scale: number;
   brightness: number;
   contrast: number;
+  sharpen: number;
   grayscale: boolean;
 }
 
@@ -151,6 +156,8 @@ type SignatureItem = {
   placements: Record<number, SigPlacement>; 
 }
 
+type PanelId = 'security' | 'overlays' | 'compression' | 'merge' | 'split' | 'enhance' | 'signature' | 'export' | 'page-edit' | null;
+
 export default function PdfEditor() {
   const [pages, setPages] = useState<PageItem[]>([])
   const [isProcessing, setIsProcessing] = useState(false)
@@ -160,17 +167,27 @@ export default function PdfEditor() {
   
   const [originalDocName, setOriginalDocName] = useState('document')
 
-  // Expanded Accordion State
-  const [activePanel, setActivePanel] = useState<'security' | 'overlays' | 'compression' | 'merge' | 'split' | 'enhance' | 'signature' | 'export' | null>('export')
-  
-  // Ref for Smooth Scrolling Focus
+  // Global Undo History
+  const [history, setHistory] = useState<{pages: PageItem[], signatures: SignatureItem[]}[]>([])
+
+  // UI State
+  const [activePanel, setActivePanel] = useState<PanelId>('export')
+  const [isFullscreen, setIsFullscreen] = useState(false)
   const panelRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  const [showViewerGrid, setShowViewerGrid] = useState(false)
 
   useEffect(() => {
     if (activePanel && panelRefs.current[activePanel]) {
       setTimeout(() => {
         panelRefs.current[activePanel]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
       }, 150)
+    }
+
+    // Default to grid view for Merge and Split actions
+    if (activePanel === 'merge' || activePanel === 'split') {
+      setShowViewerGrid(true);
+    } else if (activePanel === 'page-edit' || activePanel === 'signature') {
+      setShowViewerGrid(false);
     }
   }, [activePanel])
 
@@ -190,39 +207,25 @@ export default function PdfEditor() {
   const [watermarkOpacity, setWatermarkOpacity] = useState(30)
   const [addPageNumbers, setAddPageNumbers] = useState(false)
   
-  // Multiple Signatures State (Starts with 1 default to prevent empty array crashes)
-  const defaultSigId = `sig-${Date.now()}`;
-  const [signatures, setSignatures] = useState<SignatureItem[]>([{
-    id: defaultSigId,
-    mode: 'text',
-    text: 'New Signature',
-    font: 'Brush Script MT, cursive',
-    color: '#000033',
-    imageUrl: null,
-    applyMode: 'all',
-    customPages: '',
-    placements: {}
-  }])
-  const [activeSigId, setActiveSigId] = useState<string | null>(defaultSigId)
+  // Multiple Signatures State
+  const [signatures, setSignatures] = useState<SignatureItem[]>([])
+  const [activeSigId, setActiveSigId] = useState<string | null>(null)
   const [sigBgModel, setSigBgModel] = useState('briaai/RMBG-1.4')
   const [pageBgModel, setPageBgModel] = useState('briaai/RMBG-1.4')
   
   const [openMenuSigId, setOpenMenuSigId] = useState<string | null>(null)
 
-  const [showSigModal, setShowSigModal] = useState(false)
   const [isDraggingSig, setIsDraggingSig] = useState(false)
   const [draggingSigId, setDraggingSigId] = useState<string | null>(null)
   const [draggingContext, setDraggingContext] = useState<'right' | 'modal' | null>(null)
   const [resizingState, setResizingState] = useState<{ startX: number, startY: number, startScale: number, corner: string, sigId: string } | null>(null)
   
   const [previewPageIndex, setPreviewPageIndex] = useState(0)
-  const [showViewerGrid, setShowViewerGrid] = useState(false)
   const [sigZoom, setSigZoom] = useState(1)
 
-  // Live Signature Pre-Render State
-  const [sigPreviewUrl, setSigPreviewUrl] = useState<string | null>(null)
-  const [isGeneratingSigPreview, setIsGeneratingSigPreview] = useState(false)
-
+  // Direct Canvas Rendering Refs
+  const inlineCanvasRef = useRef<HTMLCanvasElement>(null)
+  const modalCanvasRef = useRef<HTMLCanvasElement>(null)
   const rightSideSigRef = useRef<HTMLDivElement>(null)
   const modalSigRef = useRef<HTMLDivElement>(null)
 
@@ -232,17 +235,13 @@ export default function PdfEditor() {
   const [ppiMode, setPpiMode] = useState<string>('150')
   const [customPPI, setCustomPPI] = useState<number>(150)
   const [compressionGrayscale, setCompressionGrayscale] = useState(false)
+  const [estimatedSizes, setEstimatedSizes] = useState<{ original: string, compressed: string } | null>(null)
 
   const [cleanWatermarks, setCleanWatermarks] = useState(false)
   const [splitRanges, setSplitRanges] = useState('')
-
   const [exportFormat, setExportFormat] = useState('pdf')
 
-  // Straighten, Scale & Enhance Modal State
-  const [editingPageId, setEditingPageId] = useState<string | null>(null)
-
-  // -- GUARANTEED SAFE DERIVED STATES AT TOP LEVEL --
-  const editingPageData = editingPageId ? pages.find(p => p.id === editingPageId) : null
+  // -- DERIVED STATES --
   const sigPageTarget = pages.length > 0 ? (pages[previewPageIndex] || pages[0]) : null
 
   // Advanced Mobile-Friendly Sensors
@@ -268,26 +267,116 @@ export default function PdfEditor() {
     }
   }, [pages.length, previewPageIndex])
 
-  // --- SIGNATURE PRE-RENDER LOGIC ---
+  // --- FAST CANAVS RENDERING ---
   useEffect(() => {
     let isMounted = true;
-    if ((showSigModal || activePanel === 'signature') && pages.length > 0) {
+    if (pages.length > 0 && !showViewerGrid) {
       const target = pages[previewPageIndex];
       if (target) {
-        setIsGeneratingSigPreview(true);
-        renderPageToCanvas(target, previewPageIndex, false, true).then(canvas => {
-          if (canvas && isMounted) {
-            setSigPreviewUrl(canvas.toDataURL('image/jpeg', 0.85));
-          }
-          if (isMounted) setIsGeneratingSigPreview(false);
-        });
+        const renderTimer = setTimeout(() => {
+          renderPageToCanvas(target, previewPageIndex, false, true).then(offscreenCanvas => {
+            if (isMounted && offscreenCanvas) {
+              if (inlineCanvasRef.current) {
+                inlineCanvasRef.current.width = offscreenCanvas.width;
+                inlineCanvasRef.current.height = offscreenCanvas.height;
+                inlineCanvasRef.current.getContext('2d')?.drawImage(offscreenCanvas, 0, 0);
+              }
+              if (modalCanvasRef.current) {
+                modalCanvasRef.current.width = offscreenCanvas.width;
+                modalCanvasRef.current.height = offscreenCanvas.height;
+                modalCanvasRef.current.getContext('2d')?.drawImage(offscreenCanvas, 0, 0);
+              }
+            }
+          });
+        }, 50);
+        return () => clearTimeout(renderTimer);
       }
     }
     return () => { isMounted = false; }
-  }, [showSigModal, activePanel, previewPageIndex, pages, cleanWatermarks, enableCompression, compressionGrayscale]);
+  }, [pages, previewPageIndex, cleanWatermarks, showViewerGrid, isFullscreen, activePanel]);
+
+  // --- HISTORY LOGIC ---
+  const saveHistory = useCallback(() => {
+    setHistory(prev => {
+      const clonedPages = pages.map(p => ({ ...p }));
+      const clonedSigs = signatures.map(s => ({
+        ...s,
+        placements: { ...s.placements }
+      }));
+      return [...prev.slice(-29), { pages: clonedPages, signatures: clonedSigs }];
+    });
+  }, [pages, signatures]);
+
+  const handleUndo = useCallback(() => {
+    setHistory(prev => {
+      if (prev.length === 0) return prev;
+      const newHistory = [...prev];
+      const prevState = newHistory.pop();
+      if (prevState) {
+        setPages(prevState.pages);
+        setSignatures(prevState.signatures);
+        showToast('Undo successful');
+      }
+      return newHistory;
+    });
+  }, [showToast]);
+
+  // --- COMPRESSION SIZE ESTIMATOR ---
+  useEffect(() => {
+    if (activePanel === 'compression' && pages.length > 0) {
+      let isMounted = true;
+      const estimateSizes = async () => {
+        try {
+          let origBytes = 0;
+          for (const p of pages) {
+            if (p.url.startsWith('data:')) {
+              origBytes += p.url.length * 0.75;
+            } else {
+              try {
+                const res = await fetch(p.url);
+                const blob = await res.blob();
+                origBytes += blob.size;
+              } catch {
+                origBytes += 1024 * 1024;
+              }
+            }
+          }
+
+          let compBytes = origBytes;
+          if (enableCompression) {
+            const sampleCanvas = await renderPageToCanvas(pages[0], 0, true, true);
+            if (sampleCanvas) {
+              const q = compressionQuality / 100;
+              const blob = await new Promise<Blob | null>(res => sampleCanvas.toBlob(res, 'image/jpeg', q));
+              if (blob) {
+                compBytes = blob.size * pages.length;
+              }
+            }
+          }
+
+          if (isMounted) {
+            const format = (bytes: number) => {
+              if (bytes === 0) return '0 B';
+              const k = 1024;
+              const sizes = ['B', 'KB', 'MB', 'GB'];
+              const i = Math.floor(Math.log(bytes) / Math.log(k));
+              return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+            };
+            setEstimatedSizes({ original: format(origBytes), compressed: format(compBytes) });
+          }
+        } catch (e) {
+          console.error("Size estimation failed silently", e);
+        }
+      };
+      
+      const timer = setTimeout(estimateSizes, 400);
+      return () => { isMounted = false; clearTimeout(timer); };
+    }
+  }, [activePanel, pages, enableCompression, compressionQuality, ppiMode, customPPI, compressionGrayscale]);
 
   // --- SIGNATURE HELPERS ---
   const addNewSignature = () => {
+    saveHistory();
     const newSig: SignatureItem = {
       id: `sig-${Date.now()}`,
       mode: 'text',
@@ -309,33 +398,18 @@ export default function PdfEditor() {
   }
 
   const removeSignature = (id: string) => {
-    if (signatures.length <= 1) {
-      const newSigId = `sig-${Date.now()}`;
-      setSignatures([{
-        id: newSigId,
-        mode: 'text',
-        text: 'New Signature',
-        font: 'Brush Script MT, cursive',
-        color: '#000033',
-        imageUrl: null,
-        applyMode: 'all',
-        customPages: '',
-        placements: {}
-      }]);
-      setActiveSigId(newSigId);
-      showToast('Signature reset to default');
-      return;
-    }
+    saveHistory();
     const newSigs = signatures.filter(s => s.id !== id);
     setSignatures(newSigs);
     if (activeSigId === id) {
-      setActiveSigId(newSigs[0].id);
+      setActiveSigId(newSigs.length > 0 ? newSigs[0].id : null);
     }
     showToast('Signature removed');
   }
 
-  const getSigPlacement = useCallback((sig: SignatureItem, index: number) => {
-    return sig.placements[index] || { x: 50, y: 80, scale: 50, opacity: 100 }
+  const getSigPlacement = useCallback((sig: SignatureItem | undefined, index: number) => {
+    if (!sig) return { x: 50, y: 80, scale: 50, opacity: 100 }
+    return sig.placements?.[index] || { x: 50, y: 80, scale: 50, opacity: 100 }
   }, [])
 
   const updateSigPlacement = useCallback((sigId: string, index: number, updates: Partial<SigPlacement>) => {
@@ -352,6 +426,7 @@ export default function PdfEditor() {
   }, [getSigPlacement])
 
   const syncPlacementToAllPages = (sigId: string, sourceIndex: number) => {
+    saveHistory();
     setSignatures(sigs => sigs.map(s => {
       if (s.id !== sigId) return s;
       const sourcePlacement = getSigPlacement(s, sourceIndex);
@@ -406,7 +481,7 @@ export default function PdfEditor() {
       for (const file of acceptedFiles) {
         if (file.type === 'application/pdf') {
           setLoadingText(`Extracting ${file.name}...`)
-          await new Promise(r => setTimeout(r, 50)) // allow UI to paint
+          await new Promise(r => setTimeout(r, 50))
           const arrayBuffer = await file.arrayBuffer()
           const pdfjsLib = await import('pdfjs-dist')
           
@@ -444,6 +519,7 @@ export default function PdfEditor() {
               scale: 1,
               brightness: 100,
               contrast: 100,
+              sharpen: 0,
               grayscale: false,
             })
           }
@@ -461,11 +537,13 @@ export default function PdfEditor() {
             scale: 1,
             brightness: 100,
             contrast: 100,
+            sharpen: 0,
             grayscale: false,
           })
         }
       }
 
+      saveHistory();
       setPages(prev => [...prev, ...newPages])
       setUnlockPassword('')
       showToast('Files loaded successfully')
@@ -475,7 +553,7 @@ export default function PdfEditor() {
       setIsProcessing(false)
       setLoadingText('')
     }
-  }, [unlockPassword, originalDocName, showToast])
+  }, [unlockPassword, originalDocName, showToast, saveHistory])
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -485,6 +563,7 @@ export default function PdfEditor() {
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event
     if (over && active.id !== over.id) {
+      saveHistory();
       setPages((items) => {
         const oldIndex = items.findIndex((item) => item.id === active.id)
         const newIndex = items.findIndex((item) => item.id === over.id)
@@ -495,11 +574,13 @@ export default function PdfEditor() {
   }
 
   const removePage = (idToRemove: string) => {
+    saveHistory();
     setPages(items => items.filter(item => item.id !== idToRemove))
     showToast('Page removed')
   }
 
   const rotatePage = (idToRotate: string) => {
+    saveHistory();
     setPages(items => items.map(item => item.id === idToRotate ? { ...item, rotation: (item.rotation + 90) % 360 } : item))
     showToast('Page rotated')
   }
@@ -509,29 +590,35 @@ export default function PdfEditor() {
   }
 
   const clearAll = () => {
+    saveHistory();
     setPages([])
     setOriginalDocName('document')
     setPreviewPageIndex(0)
-    
-    // Always leave at least one valid signature to avoid undefined crashes
-    const newSigId = `sig-${Date.now()}`;
-    setSignatures([{
-      id: newSigId,
-      mode: 'text',
-      text: 'New Signature',
-      font: 'Brush Script MT, cursive',
-      color: '#000033',
-      imageUrl: null,
-      applyMode: 'all',
-      customPages: '',
-      placements: {}
-    }])
-    setActiveSigId(newSigId)
+    setSignatures([])
+    setActiveSigId(null)
     showToast('All pages & settings cleared')
+  }
+
+  const handleEditPage = (id: string) => {
+    const idx = pages.findIndex(p => p.id === id);
+    if (idx !== -1) {
+      setPreviewPageIndex(idx);
+      setActivePanel('page-edit');
+      setIsFullscreen(true);
+      setShowViewerGrid(false);
+    }
+  }
+
+  const enterFullscreen = () => {
+    if (['merge', 'split', 'security'].includes(activePanel || '')) {
+      setActivePanel('page-edit')
+    }
+    setIsFullscreen(true)
   }
 
   const handleSigImageUpload = (sigId: string, e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
+      saveHistory();
       updateSignature(sigId, { imageUrl: URL.createObjectURL(e.target.files![0]), mode: 'image' })
     }
   }
@@ -540,7 +627,7 @@ export default function PdfEditor() {
     if (!imageUrl) return
     setIsProcessing(true)
     setLoadingText('Removing Background from Page...')
-    await new Promise(r => setTimeout(r, 50)) // Force UI render
+    await new Promise(r => setTimeout(r, 50))
 
     try {
       const optimizedDataUrl = await optimizeImageForAI(imageUrl)
@@ -609,6 +696,7 @@ export default function PdfEditor() {
           finalCtx.globalCompositeOperation = 'destination-in';
           finalCtx.drawImage(maskCanvas, 0, 0, finalCanvas.width, finalCanvas.height);
           
+          saveHistory();
           updatePageAttributes(pageId, { url: finalCanvas.toDataURL('image/png') })
           removedSuccessfully = true;
         } catch (hfError) {
@@ -621,6 +709,7 @@ export default function PdfEditor() {
         const bgConfig: Config = { model: fallbackModel as any, output: { format: "image/png" } }
         
         const blob = await removeBackground(imageUrl, bgConfig) 
+        saveHistory();
         updatePageAttributes(pageId, { url: URL.createObjectURL(blob) })
       }
       showToast('Page background removed')
@@ -636,13 +725,12 @@ export default function PdfEditor() {
     if (!imageUrl) return
     setIsProcessing(true)
     setLoadingText('Removing Background...')
-    await new Promise(r => setTimeout(r, 50)) // Force render
+    await new Promise(r => setTimeout(r, 50)) 
 
     try {
       const optimizedDataUrl = await optimizeImageForAI(imageUrl)
       let removedSuccessfully = false;
 
-      // Manual Architecture Loading for RMBG-1.4
       if (sigBgModel === 'briaai/RMBG-1.4') {
         try {
           const { AutoModel, AutoProcessor, RawImage, env } = await import('@huggingface/transformers');
@@ -706,6 +794,7 @@ export default function PdfEditor() {
           finalCtx.globalCompositeOperation = 'destination-in';
           finalCtx.drawImage(maskCanvas, 0, 0, finalCanvas.width, finalCanvas.height);
           
+          saveHistory();
           updateSignature(sigId, { imageUrl: finalCanvas.toDataURL('image/png') })
           removedSuccessfully = true;
         } catch (hfError) {
@@ -713,12 +802,12 @@ export default function PdfEditor() {
         }
       }
 
-      // Fallback
       if (!removedSuccessfully) {
         const fallbackModel = sigBgModel === 'briaai/RMBG-1.4' ? 'isnet' : sigBgModel;
         const bgConfig: Config = { model: fallbackModel as any, output: { format: "image/png" } }
         
         const blob = await removeBackground(imageUrl, bgConfig) 
+        saveHistory();
         updateSignature(sigId, { imageUrl: URL.createObjectURL(blob) })
       }
       showToast('Signature background removed')
@@ -734,7 +823,7 @@ export default function PdfEditor() {
     if (!imageUrl) return
     setIsProcessing(true)
     setLoadingText('Enhancing Signature...')
-    await new Promise(r => setTimeout(r, 50)) // Force render
+    await new Promise(r => setTimeout(r, 50))
 
     try {
       const img = await createImage(imageUrl)
@@ -743,6 +832,7 @@ export default function PdfEditor() {
       const ctx = cvs.getContext('2d')!
       ctx.filter = 'contrast(200%) brightness(80%) grayscale(100%)'
       ctx.drawImage(img, 0, 0)
+      saveHistory();
       updateSignature(sigId, { imageUrl: cvs.toDataURL('image/png') })
       showToast('Signature enhanced')
     } catch (e) {
@@ -755,6 +845,7 @@ export default function PdfEditor() {
 
   // Drag Placement Handlers
   const handlePointerDownSig = (ctx: 'right' | 'modal', sigId: string) => { 
+    saveHistory(); 
     setIsDraggingSig(true); 
     setDraggingContext(ctx); 
     setDraggingSigId(sigId); 
@@ -767,6 +858,7 @@ export default function PdfEditor() {
     e.stopPropagation() 
     const sig = signatures.find(s => s.id === sigId)
     if (!sig) return;
+    saveHistory(); 
     setResizingState({
       startX: e.clientX,
       startY: e.clientY,
@@ -810,6 +902,7 @@ export default function PdfEditor() {
   }
 
   const renderSignatureOverlay = (ctx: 'right' | 'modal') => {
+    if (!signatures || signatures.length === 0) return null;
     return signatures.filter(sig => shouldApplySignature(previewPageIndex, sig.applyMode, sig.customPages)).map(sig => {
       const placement = getSigPlacement(sig, previewPageIndex)
       const isActive = activeSigId === sig.id
@@ -898,7 +991,7 @@ export default function PdfEditor() {
         <button 
           onClick={(e) => { e.stopPropagation(); setShowViewerGrid(!showViewerGrid) }}
           className={`p-1.5 rounded-full transition-colors ${showViewerGrid ? 'bg-[#6384A3] text-white' : 'hover:bg-slate-200 text-slate-700'}`}
-          title="View All Pages"
+          title="Toggle Grid View"
         >
           <LayoutGrid className="w-4 h-4" />
         </button>
@@ -926,149 +1019,482 @@ export default function PdfEditor() {
     )
   }
 
-  const renderSignatureControls = (context: 'sidebar' | 'modal') => {
+  // --- PANEL RENDERERS ---
+  const renderAccordion = (id: PanelId, label: string, icon: React.ReactNode, content: React.ReactNode) => {
     return (
-      <div className="space-y-4 animate-in fade-in w-full">
-        {signatures.map((sig, sigIndex) => {
-          const currentPlacement = getSigPlacement(sig, previewPageIndex)
-          return (
-            <div key={sig.id} className={`border rounded-lg overflow-hidden transition-all ${activeSigId === sig.id ? 'border-[#6384A3] shadow-sm' : 'border-slate-200'}`}>
-              <div 
-                className={`p-3 flex justify-between items-center cursor-pointer ${activeSigId === sig.id ? 'bg-blue-50' : 'bg-slate-50 hover:bg-slate-100'}`}
-                onClick={() => setActiveSigId(sig.id)}
-              >
-                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-700">
-                  Signature {sigIndex + 1}
-                </span>
-                <button onClick={(e) => { e.stopPropagation(); removeSignature(sig.id); }} className="text-slate-400 hover:text-red-500">
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-              
-              {activeSigId === sig.id && (
-                <div className="p-3 bg-white space-y-4 border-t border-slate-100">
-                  <div className="flex bg-slate-100 p-1 rounded">
-                    <button onClick={() => updateSignature(sig.id, { mode: 'text' })} className={`flex-1 py-1 text-[10px] font-bold uppercase tracking-widest rounded ${sig.mode === 'text' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}>Text</button>
-                    <button onClick={() => updateSignature(sig.id, { mode: 'image' })} className={`flex-1 py-1 text-[10px] font-bold uppercase tracking-widest rounded ${sig.mode === 'image' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}>Image</button>
-                  </div>
-
-                  {sig.mode === 'text' && (
-                    <div className="space-y-3">
-                      <input type="text" value={sig.text} onChange={(e) => updateSignature(sig.id, { text: e.target.value })} className="w-full p-2 border border-slate-200 rounded text-sm bg-white" placeholder="Type name..." />
-                      <div className="grid grid-cols-2 gap-2">
-                        <div className="space-y-1">
-                          <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block">Font Style</label>
-                          <CustomDropdown 
-                            value={sig.font} 
-                            onChange={(val) => updateSignature(sig.id, { font: val })} 
-                            options={[
-                              { value: 'Brush Script MT, cursive', label: 'Cursive' },
-                              { value: 'Arial, sans-serif', label: 'Arial' },
-                              { value: 'Times New Roman, serif', label: 'Times' },
-                              { value: 'Courier New, monospace', label: 'Typewriter' }
-                            ]} 
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block">Text Color</label>
-                          <div className="flex items-center justify-between gap-2 bg-white border border-slate-200 rounded p-1 h-9">
-                            <input type="color" value={sig.color} onChange={(e) => updateSignature(sig.id, { color: e.target.value })} className="w-6 h-6 rounded cursor-pointer border-0 bg-transparent p-0 flex-shrink-0" />
-                            <span className="text-[10px] font-mono font-bold text-slate-500 truncate">{sig.color.toUpperCase()}</span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {sig.mode === 'image' && (
-                    <div className="space-y-3">
-                      <button onClick={() => document.getElementById(`sig-upload-${sig.id}`)?.click()} className="w-full py-2 bg-slate-50 border border-slate-200 text-slate-600 font-bold text-[10px] uppercase tracking-widest rounded hover:bg-slate-100 flex items-center justify-center gap-2">
-                        <ImageIcon className="w-3 h-3" /> Upload Image
-                      </button>
-                      <input type="file" id={`sig-upload-${sig.id}`} accept="image/*" className="hidden" onChange={(e) => handleSigImageUpload(sig.id, e)} />
-                      
-                      {sig.imageUrl && (
-                        <div className="space-y-2 mt-2">
-                          <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block">AI Model</label>
-                          <CustomDropdown 
-                            value={sigBgModel} 
-                            onChange={setSigBgModel} 
-                            direction="up"
-                            options={[
-                              { value: 'briaai/RMBG-1.4', label: 'Pro AI (Best for Objects & Products)' },
-                              { value: 'isnet_fp16', label: 'Standard AI (Best for People & Faces)' },
-                              { value: 'isnet', label: 'Max Detail AI (Best for Hair & Edges)' }
-                            ]} 
-                          />
-                          <div className="grid grid-cols-2 gap-2 pt-1">
-                            <button onClick={() => handleRemoveSigBg(sig.id, sig.imageUrl!)} disabled={isProcessing} className="py-2 bg-[#6384A3]/10 text-[#6384A3] border border-[#6384A3]/20 font-bold text-[9px] uppercase tracking-widest rounded hover:bg-[#6384A3]/20 transition-colors">
-                              Remove BG
-                            </button>
-                            <button onClick={() => handleEnhanceSig(sig.id, sig.imageUrl!)} disabled={isProcessing} className="py-2 bg-indigo-50 text-indigo-700 border border-indigo-200 font-bold text-[9px] uppercase tracking-widest rounded hover:bg-indigo-100 transition-colors flex justify-center items-center gap-1">
-                              <Sparkles className="w-3 h-3" /> Enhance Ink
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Positioning & Scale */}
-                  <div className="space-y-3 pt-2 border-t border-slate-100">
-                    <div className="space-y-1">
-                      <div className="flex justify-between text-[9px] font-bold text-slate-500 uppercase tracking-widest">
-                        <span>Scale (Page {previewPageIndex + 1})</span><span>{Math.round(currentPlacement.scale)}%</span>
-                      </div>
-                      <input type="range" min="10" max="200" value={currentPlacement.scale} onChange={(e) => updateSigPlacement(sig.id, previewPageIndex, { scale: Number(e.target.value) })} className="w-full accent-[#6384A3]" />
-                    </div>
-                    <div className="space-y-1">
-                      <div className="flex justify-between text-[9px] font-bold text-slate-500 uppercase tracking-widest">
-                        <span>Opacity (Page {previewPageIndex + 1})</span><span>{currentPlacement.opacity}%</span>
-                      </div>
-                      <input type="range" min="10" max="100" value={currentPlacement.opacity} onChange={(e) => updateSigPlacement(sig.id, previewPageIndex, { opacity: Number(e.target.value) })} className="w-full accent-[#6384A3]" />
-                    </div>
-                    
-                    <div className="space-y-1 pt-2">
-                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Apply To</label>
-                      <CustomDropdown 
-                        value={sig.applyMode} 
-                        onChange={(val) => updateSignature(sig.id, { applyMode: val as 'all' | 'custom' })} 
-                        direction="up"
-                        options={[
-                          { value: 'all', label: 'All Pages' },
-                          { value: 'custom', label: 'Custom Pages' }
-                        ]} 
-                      />
-                      {sig.applyMode === 'custom' && (
-                        <input 
-                          type="text" 
-                          placeholder="e.g. 1-3, 5, 8" 
-                          value={sig.customPages} 
-                          onChange={(e) => updateSignature(sig.id, { customPages: e.target.value })} 
-                          className="w-full p-2 mt-2 border border-slate-200 rounded text-sm bg-white" 
-                        />
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          )
-        })}
-
-        <button onClick={addNewSignature} className="w-full py-2.5 bg-slate-100 border border-slate-200 text-slate-600 font-bold text-[10px] uppercase tracking-widest rounded hover:bg-slate-200 flex items-center justify-center gap-2">
-          <Plus className="w-3.5 h-3.5" /> Add Another Signature
+      <div ref={(el) => { if (id) panelRefs.current[id] = el; }} className={`border border-slate-200 flex-shrink-0 bg-white shadow-sm transition-all relative ${activePanel === id ? 'rounded-lg z-20' : 'rounded-lg z-0 overflow-hidden'}`}>
+        <button onClick={() => setActivePanel(activePanel === id ? null : id)} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activePanel === id ? 'rounded-t-lg border-b border-slate-100' : 'rounded-lg'}`}>
+          {icon} {label}
         </button>
-
-        {context === 'sidebar' && signatures.length > 0 && (
-          <button onClick={() => setShowSigModal(true)} disabled={pages.length === 0} className="w-full py-2.5 bg-slate-800 text-white font-bold text-[10px] uppercase tracking-widest rounded-lg hover:bg-black transition-colors shadow-sm flex items-center justify-center gap-2">
-            <Move className="w-3.5 h-3.5" /> Open Full Screen
-          </button>
+        {activePanel === id && (
+          <div className="p-4 bg-white rounded-b-lg">
+            {content}
+          </div>
         )}
       </div>
     )
   }
 
+  const renderMergeControls = () => (
+    <div className="space-y-4">
+      <p className="text-xs text-slate-500">Upload multiple PDFs or images to seamlessly append them to your current document.</p>
+      <button 
+        onClick={() => document.getElementById('merge-file-upload')?.click()} 
+        className="w-full py-2.5 bg-white border-2 border-dashed border-slate-300 text-slate-600 hover:border-[#6384A3] hover:text-[#6384A3] font-bold text-xs uppercase tracking-widest rounded-lg transition-colors flex items-center justify-center gap-2"
+      >
+        + Add Files to Merge
+      </button>
+      <input type="file" id="merge-file-upload" multiple accept=".pdf,image/jpeg,image/png,image/webp" className="hidden" 
+        onChange={(e) => {
+          if (e.target.files && e.target.files.length > 0) {
+            onDrop(Array.from(e.target.files));
+            e.target.value = '';
+          }
+        }} 
+      />
+    </div>
+  )
+
+  const renderSplitControls = () => (
+    <div className="space-y-4">
+      <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">Ranges to extract (e.g. 1-2, 5, 8-10)</p>
+      <input type="text" placeholder="1-3, 5-6" value={splitRanges} onChange={(e) => setSplitRanges(e.target.value)} className="w-full p-2 border border-slate-200 rounded text-sm bg-white" />
+      <button onClick={handleSplitPdf} disabled={isProcessing || pages.length === 0} className="w-full py-2 bg-slate-800 text-white font-bold text-[10px] uppercase tracking-widest rounded-lg hover:bg-black transition-colors shadow-sm">
+        Download Split ZIP
+      </button>
+    </div>
+  )
+
+  const renderPageEditControls = () => {
+    const page = pages[previewPageIndex];
+    if (!page) return <p className="text-xs text-slate-500">No page selected</p>;
+
+    return (
+      <div className="space-y-5 animate-in fade-in">
+        <div className="grid grid-cols-2 gap-4 pb-2">
+          <div className="space-y-2">
+            <div className="flex justify-between text-[10px] font-bold text-slate-600 uppercase tracking-widest">
+              <span>Rotation</span>
+              <span className="text-[#6384A3]">{page.fineRotation}°</span>
+            </div>
+            <input 
+              type="range" min="-45" max="45" step="0.5" 
+              value={page.fineRotation} 
+              onPointerDown={saveHistory}
+              onChange={(e) => updatePageAttributes(page.id, { fineRotation: Number(e.target.value) })} 
+              className="w-full accent-[#6384A3]" 
+            />
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex justify-between text-[10px] font-bold text-slate-600 uppercase tracking-widest">
+              <span>Zoom</span>
+              <span className="text-[#6384A3]">{(page.scale || 1).toFixed(2)}x</span>
+            </div>
+            <input 
+              type="range" min="0.5" max="3" step="0.05" 
+              value={page.scale || 1} 
+              onPointerDown={saveHistory}
+              onChange={(e) => updatePageAttributes(page.id, { scale: Number(e.target.value) })} 
+              className="w-full accent-[#6384A3]" 
+            />
+          </div>
+        </div>
+
+        <div className="pt-3 border-t border-slate-100">
+          <h4 className="text-[10px] font-bold text-slate-800 uppercase tracking-widest mb-3">Enhancements</h4>
+          <div className="grid grid-cols-3 gap-2 sm:gap-4">
+            <div>
+              <div className="flex justify-between text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-2">
+                <span>Bright</span><span className="text-[#6384A3]">{page.brightness}%</span>
+              </div>
+              <input type="range" min="50" max="150" value={page.brightness} onPointerDown={saveHistory} onChange={(e) => updatePageAttributes(page.id, { brightness: Number(e.target.value) })} className="w-full accent-[#6384A3]" />
+            </div>
+            <div>
+              <div className="flex justify-between text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-2">
+                <span>Contrast</span><span className="text-[#6384A3]">{page.contrast}%</span>
+              </div>
+              <input type="range" min="50" max="150" value={page.contrast} onPointerDown={saveHistory} onChange={(e) => updatePageAttributes(page.id, { contrast: Number(e.target.value) })} className="w-full accent-[#6384A3]" />
+            </div>
+            <div>
+              <div className="flex justify-between text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-2">
+                <span>Sharpen</span><span className="text-[#6384A3]">{page.sharpen}%</span>
+              </div>
+              <input type="range" min="0" max="100" value={page.sharpen} onPointerDown={saveHistory} onChange={(e) => updatePageAttributes(page.id, { sharpen: Number(e.target.value) })} className="w-full accent-[#6384A3]" />
+            </div>
+          </div>
+          
+          <div className="flex flex-col gap-2 mt-4">
+            <label className="flex items-center gap-2 text-[10px] font-bold text-slate-700 uppercase tracking-widest cursor-pointer">
+              <input type="checkbox" checked={page.grayscale} onChange={(e) => { saveHistory(); updatePageAttributes(page.id, { grayscale: e.target.checked }) }} className="w-3.5 h-3.5 accent-[#6384A3] rounded" />
+              Black & White (Grayscale)
+            </label>
+          </div>
+
+          <div className="pt-4 border-t border-slate-100 mt-4 space-y-2">
+            <label className="text-[10px] font-bold text-slate-700 uppercase tracking-widest block">AI Background Removal</label>
+            <CustomDropdown 
+              value={pageBgModel} 
+              onChange={setPageBgModel} 
+              direction="up"
+              options={[
+                { value: 'briaai/RMBG-1.4', label: 'Light' },
+                { value: 'isnet_fp16', label: 'Standard ' },
+                { value: 'isnet', label: 'Max' }
+              ]} 
+            />
+            <button 
+              onClick={() => handleRemovePageBg(page.id, page.url)} 
+              disabled={isProcessing} 
+              className="w-full py-2 bg-[#6384A3]/10 text-[#6384A3] border border-[#6384A3]/20 font-bold text-[9px] uppercase tracking-widest rounded hover:bg-[#6384A3]/20 transition-colors flex items-center justify-center gap-2"
+            >
+              <Wand2 className="w-3 h-3" /> Remove Background
+            </button>
+          </div>
+        </div>
+
+        <div className="pt-4 border-t border-slate-100">
+          <button 
+            onClick={() => {
+              saveHistory();
+              updatePageAttributes(page.id, { url: page.originalUrl, fineRotation: 0, scale: 1, brightness: 100, contrast: 100, sharpen: 0, grayscale: false });
+              showToast('Page reset to original');
+            }} 
+            className="w-full py-2 px-4 text-xs font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50 uppercase tracking-widest transition-colors"
+          >
+            Reset to Original
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const renderSignatureControls = (context: 'sidebar' | 'modal') => (
+    <div className="space-y-4 animate-in fade-in w-full">
+      {signatures.length > 0 && signatures.map((sig, sigIndex) => {
+        const currentPlacement = getSigPlacement(sig, previewPageIndex)
+        return (
+          <div key={sig.id} className={`border rounded-lg overflow-hidden transition-all ${activeSigId === sig.id ? 'border-[#6384A3] shadow-sm' : 'border-slate-200'}`}>
+            <div 
+              className={`p-3 flex justify-between items-center cursor-pointer ${activeSigId === sig.id ? 'bg-blue-50' : 'bg-slate-50 hover:bg-slate-100'}`}
+              onClick={() => setActiveSigId(sig.id)}
+            >
+              <span className="text-[10px] font-bold uppercase tracking-widest text-slate-700">
+                Signature {sigIndex + 1}
+              </span>
+              <button onClick={(e) => { e.stopPropagation(); removeSignature(sig.id); }} className="text-slate-400 hover:text-red-500">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+            
+            {activeSigId === sig.id && (
+              <div className="p-3 bg-white space-y-4 border-t border-slate-100">
+                <div className="flex bg-slate-100 p-1 rounded">
+                  <button onClick={() => { saveHistory(); updateSignature(sig.id, { mode: 'text' }) }} className={`flex-1 py-1 text-[10px] font-bold uppercase tracking-widest rounded ${sig.mode === 'text' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}>Text</button>
+                  <button onClick={() => { saveHistory(); updateSignature(sig.id, { mode: 'image' }) }} className={`flex-1 py-1 text-[10px] font-bold uppercase tracking-widest rounded ${sig.mode === 'image' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}>Image</button>
+                </div>
+
+                {sig.mode === 'text' && (
+                  <div className="space-y-3">
+                    <input type="text" value={sig.text} onFocus={saveHistory} onChange={(e) => updateSignature(sig.id, { text: e.target.value })} className="w-full p-2 border border-slate-200 rounded text-sm bg-white" placeholder="Type name..." />
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block">Font Style</label>
+                        <CustomDropdown 
+                          value={sig.font} 
+                          onChange={(val) => { saveHistory(); updateSignature(sig.id, { font: val }) }} 
+                          options={[
+                            { value: 'Brush Script MT, cursive', label: 'Cursive' },
+                            { value: 'Arial, sans-serif', label: 'Arial' },
+                            { value: 'Times New Roman, serif', label: 'Times' },
+                            { value: 'Courier New, monospace', label: 'Typewriter' }
+                          ]} 
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block">Text Color</label>
+                        <div className="flex items-center justify-between gap-2 bg-white border border-slate-200 rounded p-1 h-9">
+                          <input type="color" value={sig.color} onFocus={saveHistory} onChange={(e) => updateSignature(sig.id, { color: e.target.value })} className="w-6 h-6 rounded cursor-pointer border-0 bg-transparent p-0 flex-shrink-0" />
+                          <span className="text-[10px] font-mono font-bold text-slate-500 truncate">{sig.color.toUpperCase()}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {sig.mode === 'image' && (
+                  <div className="space-y-3">
+                    <button onClick={() => document.getElementById(`sig-upload-${sig.id}`)?.click()} className="w-full py-2 bg-slate-50 border border-slate-200 text-slate-600 font-bold text-[10px] uppercase tracking-widest rounded hover:bg-slate-100 flex items-center justify-center gap-2">
+                      <ImageIcon className="w-3 h-3" /> Upload Image
+                    </button>
+                    <input type="file" id={`sig-upload-${sig.id}`} accept="image/*" className="hidden" onChange={(e) => handleSigImageUpload(sig.id, e)} />
+                    
+                    {sig.imageUrl && (
+                      <div className="space-y-2 mt-2">
+                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block">AI Model</label>
+                        <CustomDropdown 
+                          value={sigBgModel} 
+                          onChange={setSigBgModel} 
+                          direction="up"
+                          options={[
+                            { value: 'briaai/RMBG-1.4', label: 'Pro AI (Best)' },
+                            { value: 'isnet_fp16', label: 'Standard AI' },
+                            { value: 'isnet', label: 'Max Detail' }
+                          ]} 
+                        />
+                        <div className="grid grid-cols-2 gap-2 pt-1">
+                          <button onClick={() => handleRemoveSigBg(sig.id, sig.imageUrl!)} disabled={isProcessing} className="py-2 bg-[#6384A3]/10 text-[#6384A3] border border-[#6384A3]/20 font-bold text-[9px] uppercase tracking-widest rounded hover:bg-[#6384A3]/20 transition-colors">
+                            Remove BG
+                          </button>
+                          <button onClick={() => handleEnhanceSig(sig.id, sig.imageUrl!)} disabled={isProcessing} className="py-2 bg-indigo-50 text-indigo-700 border border-indigo-200 font-bold text-[9px] uppercase tracking-widest rounded hover:bg-indigo-100 transition-colors flex justify-center items-center gap-1">
+                            <Sparkles className="w-3 h-3" /> Enhance
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Positioning & Scale */}
+                <div className="space-y-3 pt-2 border-t border-slate-100">
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-[9px] font-bold text-slate-500 uppercase tracking-widest">
+                      <span>Scale (Page {previewPageIndex + 1})</span><span>{Math.round(currentPlacement.scale)}%</span>
+                    </div>
+                    <input type="range" min="10" max="200" value={currentPlacement.scale} onPointerDown={saveHistory} onChange={(e) => updateSigPlacement(sig.id, previewPageIndex, { scale: Number(e.target.value) })} className="w-full accent-[#6384A3]" />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-[9px] font-bold text-slate-500 uppercase tracking-widest">
+                      <span>Opacity (Page {previewPageIndex + 1})</span><span>{currentPlacement.opacity}%</span>
+                    </div>
+                    <input type="range" min="10" max="100" value={currentPlacement.opacity} onPointerDown={saveHistory} onChange={(e) => updateSigPlacement(sig.id, previewPageIndex, { opacity: Number(e.target.value) })} className="w-full accent-[#6384A3]" />
+                  </div>
+                  
+                  <div className="space-y-1 pt-2">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Apply To</label>
+                    <CustomDropdown 
+                      value={sig.applyMode} 
+                      onChange={(val) => { saveHistory(); updateSignature(sig.id, { applyMode: val as 'all' | 'custom' }); }} 
+                      direction="up"
+                      options={[
+                        { value: 'all', label: 'All Pages' },
+                        { value: 'custom', label: 'Custom Pages' }
+                      ]} 
+                    />
+                    {sig.applyMode === 'custom' && (
+                      <input 
+                        type="text" 
+                        placeholder="e.g. 1-3, 5, 8" 
+                        value={sig.customPages} 
+                        onFocus={saveHistory}
+                        onChange={(e) => updateSignature(sig.id, { customPages: e.target.value })} 
+                        className="w-full p-2 mt-2 border border-slate-200 rounded text-sm bg-white" 
+                      />
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      })}
+
+      <button onClick={addNewSignature} className="w-full py-2.5 bg-slate-100 border border-slate-200 text-slate-600 font-bold text-[10px] uppercase tracking-widest rounded hover:bg-slate-200 flex items-center justify-center gap-2">
+        <Plus className="w-3.5 h-3.5" /> Add Signature
+      </button>
+
+      {context === 'sidebar' && !isFullscreen && pages.length > 0 && (
+        <button onClick={enterFullscreen} disabled={pages.length === 0} className="w-full py-2.5 bg-slate-800 text-white font-bold text-[10px] uppercase tracking-widest rounded-lg hover:bg-black transition-colors shadow-sm flex items-center justify-center gap-2 mt-2">
+          <Move className="w-3.5 h-3.5" /> Open Full Screen
+        </button>
+      )}
+    </div>
+  )
+
+  const renderEnhanceControls = () => (
+    <div className="space-y-4">
+      <label className="flex items-start gap-2 text-xs font-bold text-slate-700 cursor-pointer">
+        <input type="checkbox" checked={cleanWatermarks} onChange={(e) => { setCleanWatermarks(e.target.checked); showToast(e.target.checked ? 'Global scan cleaner enabled' : 'Global scan cleaner disabled'); }} className="w-4 h-4 mt-0.5 accent-[#6384A3] rounded" />
+        <div>
+          <span className="uppercase tracking-wider">Remove Faint Watermarks</span>
+          <p className="text-[9px] text-slate-400 font-normal mt-1 leading-tight">Washes out light colors, shadows, and faint watermarks while preserving dark text for scanned documents globally.</p>
+        </div>
+      </label>
+      <p className="text-[10px] text-[#6384A3] font-bold mt-2 pt-2 border-t border-slate-100">Pro Tip: Use 'Page Settings' for local AI background removal.</p>
+    </div>
+  )
+
+  const renderSecurityControls = () => (
+    <div className="space-y-4">
+      <div className="space-y-2">
+        <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+          <Unlock className="w-3 h-3" /> Unlock PDF
+        </label>
+        <input type="password" placeholder="Required for locked PDFs" value={unlockPassword} onChange={(e) => setUnlockPassword(e.target.value)} className="w-full p-2 border border-slate-200 rounded text-sm bg-white" />
+      </div>
+      <div className="space-y-2 pt-2 border-t border-slate-50">
+        <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+          <Lock className="w-3 h-3" /> Encrypt Output
+        </label>
+        <input type="password" placeholder="Set a new password (optional)" value={encryptPassword} onChange={(e) => setEncryptPassword(e.target.value)} className="w-full p-2 border border-slate-200 rounded text-sm bg-white" />
+      </div>
+    </div>
+  )
+
+  const renderOverlayControls = () => (
+    <div className="space-y-4">
+      <label className="flex items-center gap-2 text-xs font-bold text-slate-700 uppercase tracking-wider cursor-pointer border-b border-slate-100 pb-3">
+        <input type="checkbox" checked={addPageNumbers} onChange={(e) => setAddPageNumbers(e.target.checked)} className="w-4 h-4 accent-[#6384A3] rounded" />
+        <Hash className="w-3 h-3 text-[#6384A3]" /> Stamp Page Numbers
+      </label>
+      
+      <div className="space-y-2">
+        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Add Watermark Text</label>
+        <input type="text" placeholder="e.g. CONFIDENTIAL" value={watermarkText} onChange={(e) => setWatermarkText(e.target.value)} className="w-full p-2 border border-slate-200 rounded text-sm bg-white" />
+      </div>
+      <div className="space-y-2">
+        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Watermark Placement</label>
+        <CustomDropdown 
+          value={watermarkPlacement} 
+          onChange={setWatermarkPlacement} 
+          options={[
+            { value: 'center', label: 'Diagonal Center' },
+            { value: 'top-left', label: 'Top Left' },
+            { value: 'top-right', label: 'Top Right' },
+            { value: 'bottom-left', label: 'Bottom Left' },
+            { value: 'bottom-right', label: 'Bottom Right' }
+          ]} 
+        />
+      </div>
+      <div className="space-y-2">
+        <div className="flex justify-between text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+          <span>Opacity</span>
+          <span className="text-[#6384A3]">{watermarkOpacity}%</span>
+        </div>
+        <input type="range" min="10" max="100" value={watermarkOpacity} onChange={(e) => setWatermarkOpacity(Number(e.target.value))} className="w-full accent-[#6384A3]" />
+      </div>
+    </div>
+  )
+
+  const renderCompressionControls = () => (
+    <div className="space-y-4">
+      <label className="flex items-center gap-2 text-xs font-bold text-slate-700 uppercase tracking-wider cursor-pointer">
+        <input type="checkbox" checked={enableCompression} onChange={(e) => setEnableCompression(e.target.checked)} className="w-4 h-4 accent-[#6384A3] rounded" />
+        Force File Shrink
+      </label>
+      {enableCompression ? (
+        <div className="space-y-3 animate-in fade-in pt-2 border-t border-slate-100 mt-2">
+          <div className="space-y-1">
+            <div className="flex justify-between text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+              <span>JPEG Quality</span>
+              <span className="text-[#6384A3]">{compressionQuality}%</span>
+            </div>
+            <input type="range" min="10" max="100" value={compressionQuality} onChange={(e) => setCompressionQuality(Number(e.target.value))} className="w-full accent-[#6384A3]" />
+          </div>
+          
+          <div className="space-y-1 pt-1">
+            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">Max Resolution (PPI)</label>
+            <CustomDropdown 
+              value={ppiMode} 
+              onChange={(val) => setPpiMode(val)} 
+              direction="up"
+              options={[
+                { value: '72', label: '72 PPI (Web / Smallest)' },
+                { value: '150', label: '150 PPI (Medium)' },
+                { value: '300', label: '300 PPI (Print / High)' },
+                { value: '0', label: 'Original Resolution' },
+                { value: 'custom', label: 'Custom PPI Range' }
+              ]} 
+            />
+            {ppiMode === 'custom' && (
+              <div className="space-y-1 mt-3 p-2 bg-slate-50 border border-slate-100 rounded">
+                <div className="flex justify-between text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                  <span>Custom PPI</span>
+                  <span className="text-[#6384A3]">{customPPI} PPI</span>
+                </div>
+                <input 
+                  type="range" 
+                  min="10" 
+                  max="1200" 
+                  value={customPPI} 
+                  onChange={(e) => setCustomPPI(Number(e.target.value))} 
+                  className="w-full accent-[#6384A3]" 
+                />
+              </div>
+            )}
+          </div>
+
+          <div className="pt-1">
+            <label className="flex items-center gap-2 text-[10px] font-bold text-slate-600 uppercase tracking-widest cursor-pointer">
+              <input 
+                type="checkbox" 
+                checked={compressionGrayscale} 
+                onChange={(e) => setCompressionGrayscale(e.target.checked)} 
+                className="w-3.5 h-3.5 accent-[#6384A3] rounded cursor-pointer" 
+              />
+              Convert to Grayscale
+            </label>
+          </div>
+          <p className="text-[9px] text-slate-400 leading-tight">These settings apply to PDF exports to significantly reduce file size.</p>
+        </div>
+      ) : (
+        <p className="text-[10px] text-slate-500">Currently exporting visually lossless JPEGs for optimal quality/size balance.</p>
+      )}
+
+      {/* Size Estimator */}
+      {estimatedSizes && (
+        <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-2 gap-2 text-center animate-in fade-in">
+          <div className="bg-slate-50 p-2 rounded border border-slate-200">
+            <span className="block text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Current Size</span>
+            <span className="text-xs font-bold text-slate-700">{estimatedSizes.original}</span>
+          </div>
+          <div className="bg-blue-50 p-2 rounded border border-blue-100">
+            <span className="block text-[9px] font-bold text-blue-500 uppercase tracking-widest mb-1">Output Est.</span>
+            <span className="text-xs font-bold text-blue-700">{estimatedSizes.compressed}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+
+  const renderExportControls = () => (
+    <div className="space-y-4">
+      <div className="space-y-2">
+        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Main Export Format</label>
+        <CustomDropdown 
+          value={exportFormat} 
+          onChange={setExportFormat} 
+          direction="up"
+          options={[
+            { value: 'pdf', label: 'PDF Document (.pdf)' },
+            { value: 'word', label: 'Word Document (.doc)' },
+            { value: 'images', label: 'Image Archive (.zip)' },
+          ]} 
+        />
+      </div>
+    </div>
+  )
+
+  const renderSidebarAccordions = (isForFullscreen: boolean) => {
+    return (
+      <div className="space-y-3">
+        {!isForFullscreen && renderAccordion('merge', 'Merge Documents', <Layers className="w-4 h-4 text-[#6384A3]"/>, renderMergeControls())}
+        {!isForFullscreen && renderAccordion('split', 'Split Document', <Scissors className="w-4 h-4 text-[#6384A3]"/>, renderSplitControls())}
+        
+        {pages.length > 0 && renderAccordion('page-edit', 'Page Settings', <Edit3 className="w-4 h-4 text-[#6384A3]"/>, renderPageEditControls())}
+        {renderAccordion('signature', 'Signature Studio', <PenTool className="w-4 h-4 text-[#6384A3]"/>, renderSignatureControls(isForFullscreen ? 'modal' : 'sidebar'))}
+        {renderAccordion('enhance', 'Scan Cleaner (Global)', <Wand2 className="w-4 h-4 text-[#6384A3]"/>, renderEnhanceControls())}
+        
+        {!isForFullscreen && renderAccordion('security', 'Security & Passwords', <ShieldCheck className="w-4 h-4 text-[#6384A3]"/>, renderSecurityControls())}
+        
+        {renderAccordion('overlays', 'Text Overlays', <Type className="w-4 h-4 text-[#6384A3]"/>, renderOverlayControls())}
+        {renderAccordion('compression', 'Doc Compression', <SlidersHorizontal className="w-4 h-4 text-[#6384A3]"/>, renderCompressionControls())}
+        {!isForFullscreen && renderAccordion('export', 'Format & Export', <Download className="w-4 h-4 text-[#6384A3]"/>, renderExportControls())}
+      </div>
+    )
+  }
+
+  // --- CORE CANVAS RENDERING ---
   const renderPageToCanvas = async (page: PageItem, index: number, forPdf = false, skipSignature = false) => {
     const img = await createImage(page.url)
     const canvas = document.createElement('canvas')
@@ -1145,8 +1571,36 @@ export default function PdfEditor() {
       ctx.putImageData(imgData, 0, 0)
     }
 
+    // Manual JS Sharpening for Output Context
+    if (page.sharpen > 0) {
+      const amount = page.sharpen / 100;
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imgData.data;
+      const w = canvas.width;
+      const h = canvas.height;
+      const copy = new Uint8ClampedArray(data);
+      const k1 = -amount;
+      const k4 = 1 + 4 * amount;
+      
+      for (let y = 1; y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+          const px = (y * w + x) * 4;
+          for (let c = 0; c < 3; c++) {
+            const val = 
+              k1 * copy[px - w * 4 + c] +
+              k1 * copy[px - 4 + c] +
+              k4 * copy[px + c] +
+              k1 * copy[px + 4 + c] +
+              k1 * copy[px + w * 4 + c];
+            data[px + c] = val;
+          }
+        }
+      }
+      ctx.putImageData(imgData, 0, 0);
+    }
+
     // Signatures Overlay
-    if (!skipSignature) {
+    if (!skipSignature && signatures && signatures.length > 0) {
       for (const sig of signatures) {
         if (shouldApplySignature(index, sig.applyMode, sig.customPages)) {
           const placement = getSigPlacement(sig, index)
@@ -1408,252 +1862,44 @@ export default function PdfEditor() {
 
   return (
     <>
+      {/* SVG Filters (Global defs for CSS Sharpening) */}
+      <svg style={{ display: 'none' }}>
+        <defs>
+          {pages.map(p => {
+            if (p.sharpen > 0) {
+              const amount = p.sharpen / 100;
+              const center = 1 + 4 * amount;
+              const edge = -amount;
+              return (
+                <filter key={`sharpen-filter-${p.id}`} id={`sharpen-${p.id}`}>
+                  <feConvolveMatrix 
+                    order="3 3" 
+                    preserveAlpha="true" 
+                    kernelMatrix={`0 ${edge} 0 ${edge} ${center} ${edge} 0 ${edge} 0`} 
+                  />
+                </filter>
+              )
+            }
+            return null;
+          })}
+        </defs>
+      </svg>
+
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col lg:flex-row h-auto lg:h-[650px] min-h-[650px]">
         
         {/* Sidebar Settings */}
         <div className="w-full lg:w-80 h-auto lg:h-full flex flex-col bg-slate-50 border-b lg:border-b-0 lg:border-r border-slate-200 order-2 lg:order-1 relative">
-          <div className="p-4 lg:p-6 pb-2 border-b border-slate-200 flex-shrink-0 z-10 bg-slate-50">
+          <div className="p-4 lg:p-6 pb-2 border-b border-slate-200 flex-shrink-0 z-10 bg-slate-50 flex items-center justify-between">
             <h4 className="text-xs font-bold text-slate-800 uppercase tracking-widest flex items-center gap-2">
               <Settings2 className="w-4 h-4" /> Doc Settings
             </h4>
+            <button onClick={handleUndo} disabled={history.length === 0} className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-200 rounded transition-colors disabled:opacity-30 disabled:hover:bg-transparent" title="Undo">
+              <Undo2 className="w-4 h-4" />
+            </button>
           </div>
 
           <div className="space-y-3 flex-1 overflow-y-auto p-4 lg:p-6 pt-4 pb-4">
-            
-            {/* Merge Accordion */}
-            <div ref={(el) => { panelRefs.current['merge'] = el; }} className={`border border-slate-200 flex-shrink-0 bg-white shadow-sm transition-all relative ${activePanel === 'merge' ? 'rounded-lg z-20' : 'rounded-lg z-0 overflow-hidden'}`}>
-              <button onClick={() => setActivePanel(activePanel === 'merge' ? null : 'merge')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activePanel === 'merge' ? 'rounded-t-lg' : 'rounded-lg'}`}>
-                <Layers className="w-4 h-4 text-[#6384A3]" /> Merge Documents
-              </button>
-              {activePanel === 'merge' && (
-                <div className="p-4 space-y-4 border-t border-slate-100 rounded-b-lg">
-                  <p className="text-xs text-slate-500">Upload multiple PDFs or images to seamlessly append them to your current document.</p>
-                  <button 
-                    onClick={() => document.getElementById('merge-file-upload')?.click()} 
-                    className="w-full py-2.5 bg-white border-2 border-dashed border-slate-300 text-slate-600 hover:border-[#6384A3] hover:text-[#6384A3] font-bold text-xs uppercase tracking-widest rounded-lg transition-colors flex items-center justify-center gap-2"
-                  >
-                    + Add Files to Merge
-                  </button>
-                  <input type="file" id="merge-file-upload" multiple accept=".pdf,image/jpeg,image/png,image/webp" className="hidden" 
-                    onChange={(e) => {
-                      if (e.target.files && e.target.files.length > 0) {
-                        onDrop(Array.from(e.target.files));
-                        e.target.value = '';
-                      }
-                    }} 
-                  />
-                </div>
-              )}
-            </div>
-
-            {/* Split Accordion */}
-            <div ref={(el) => { panelRefs.current['split'] = el; }} className={`border border-slate-200 flex-shrink-0 bg-white shadow-sm transition-all relative ${activePanel === 'split' ? 'rounded-lg z-20' : 'rounded-lg z-0 overflow-hidden'}`}>
-              <button onClick={() => setActivePanel(activePanel === 'split' ? null : 'split')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activePanel === 'split' ? 'rounded-t-lg' : 'rounded-lg'}`}>
-                <Scissors className="w-4 h-4 text-[#6384A3]" /> Split Document
-              </button>
-              {activePanel === 'split' && (
-                <div className="p-4 space-y-4 border-t border-slate-100 rounded-b-lg">
-                  <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">Ranges to extract (e.g. 1-2, 5, 8-10)</p>
-                  <input type="text" placeholder="1-3, 5-6" value={splitRanges} onChange={(e) => setSplitRanges(e.target.value)} className="w-full p-2 border border-slate-200 rounded text-sm bg-white" />
-                  <button onClick={handleSplitPdf} disabled={isProcessing || pages.length === 0} className="w-full py-2 bg-slate-800 text-white font-bold text-[10px] uppercase tracking-widest rounded-lg hover:bg-black transition-colors shadow-sm">
-                    Download Split ZIP
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Signature Studio Accordion */}
-            <div ref={(el) => { panelRefs.current['signature'] = el; }} className={`border border-slate-200 flex-shrink-0 bg-white shadow-sm transition-all relative ${activePanel === 'signature' ? 'rounded-lg z-20' : 'rounded-lg z-0 overflow-hidden'}`}>
-              <button onClick={() => setActivePanel(activePanel === 'signature' ? null : 'signature')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activePanel === 'signature' ? 'rounded-t-lg' : 'rounded-lg'}`}>
-                <PenTool className="w-4 h-4 text-[#6384A3]" /> Signature Studio
-              </button>
-              {activePanel === 'signature' && (
-                <div className="p-4 space-y-4 border-t border-slate-100 rounded-b-lg">
-                  {renderSignatureControls('sidebar')}
-                </div>
-              )}
-            </div>
-
-            {/* Enhance & Clean Accordion */}
-            <div ref={(el) => { panelRefs.current['enhance'] = el; }} className={`border border-slate-200 flex-shrink-0 bg-white shadow-sm transition-all relative ${activePanel === 'enhance' ? 'rounded-lg z-20' : 'rounded-lg z-0 overflow-hidden'}`}>
-              <button onClick={() => setActivePanel(activePanel === 'enhance' ? null : 'enhance')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activePanel === 'enhance' ? 'rounded-t-lg' : 'rounded-lg'}`}>
-                <Wand2 className="w-4 h-4 text-[#6384A3]" /> Scan Cleaner (Global)
-              </button>
-              {activePanel === 'enhance' && (
-                <div className="p-4 space-y-4 border-t border-slate-100 rounded-b-lg">
-                  <label className="flex items-start gap-2 text-xs font-bold text-slate-700 cursor-pointer">
-                    <input type="checkbox" checked={cleanWatermarks} onChange={(e) => { setCleanWatermarks(e.target.checked); showToast(e.target.checked ? 'Global scan cleaner enabled' : 'Global scan cleaner disabled'); }} className="w-4 h-4 mt-0.5 accent-[#6384A3] rounded" />
-                    <div>
-                      <span className="uppercase tracking-wider">Remove Faint Watermarks</span>
-                      <p className="text-[9px] text-slate-400 font-normal mt-1 leading-tight">Washes out light colors, shadows, and faint watermarks while preserving dark text for scanned documents globally.</p>
-                    </div>
-                  </label>
-                  <p className="text-[10px] text-[#6384A3] font-bold mt-2 pt-2 border-t border-slate-100">Pro Tip: Click the Edit icon on a specific page thumbnail for local AI background removal.</p>
-                </div>
-              )}
-            </div>
-
-            {/* Security Accordion */}
-            <div ref={(el) => { panelRefs.current['security'] = el; }} className={`border border-slate-200 flex-shrink-0 bg-white shadow-sm transition-all relative ${activePanel === 'security' ? 'rounded-lg z-20' : 'rounded-lg z-0 overflow-hidden'}`}>
-              <button onClick={() => setActivePanel(activePanel === 'security' ? null : 'security')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activePanel === 'security' ? 'rounded-t-lg' : 'rounded-lg'}`}>
-                <ShieldCheck className="w-4 h-4 text-[#6384A3]" /> Security & Passwords
-              </button>
-              {activePanel === 'security' && (
-                <div className="p-4 space-y-4 border-t border-slate-100 rounded-b-lg">
-                  <div className="space-y-2">
-                    <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                      <Unlock className="w-3 h-3" /> Unlock PDF
-                    </label>
-                    <input type="password" placeholder="Required for locked PDFs" value={unlockPassword} onChange={(e) => setUnlockPassword(e.target.value)} className="w-full p-2 border border-slate-200 rounded text-sm bg-white" />
-                  </div>
-                  <div className="space-y-2 pt-2 border-t border-slate-50">
-                    <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                      <Lock className="w-3 h-3" /> Encrypt Output
-                    </label>
-                    <input type="password" placeholder="Set a new password (optional)" value={encryptPassword} onChange={(e) => setEncryptPassword(e.target.value)} className="w-full p-2 border border-slate-200 rounded text-sm bg-white" />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Overlays Accordion */}
-            <div ref={(el) => { panelRefs.current['overlays'] = el; }} className={`border border-slate-200 flex-shrink-0 bg-white shadow-sm transition-all relative ${activePanel === 'overlays' ? 'rounded-lg z-20' : 'rounded-lg z-0 overflow-hidden'}`}>
-              <button onClick={() => setActivePanel(activePanel === 'overlays' ? null : 'overlays')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activePanel === 'overlays' ? 'rounded-t-lg' : 'rounded-lg'}`}>
-                <Type className="w-4 h-4 text-[#6384A3]" /> Text Overlays
-              </button>
-              {activePanel === 'overlays' && (
-                <div className="p-4 space-y-4 border-t border-slate-100 rounded-b-lg">
-                  <label className="flex items-center gap-2 text-xs font-bold text-slate-700 uppercase tracking-wider cursor-pointer border-b border-slate-100 pb-3">
-                    <input type="checkbox" checked={addPageNumbers} onChange={(e) => setAddPageNumbers(e.target.checked)} className="w-4 h-4 accent-[#6384A3] rounded" />
-                    <Hash className="w-3 h-3 text-[#6384A3]" /> Stamp Page Numbers
-                  </label>
-                  
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Add Watermark Text</label>
-                    <input type="text" placeholder="e.g. CONFIDENTIAL" value={watermarkText} onChange={(e) => setWatermarkText(e.target.value)} className="w-full p-2 border border-slate-200 rounded text-sm bg-white" />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Watermark Placement</label>
-                    <CustomDropdown 
-                      value={watermarkPlacement} 
-                      onChange={setWatermarkPlacement} 
-                      options={[
-                        { value: 'center', label: 'Diagonal Center' },
-                        { value: 'top-left', label: 'Top Left' },
-                        { value: 'top-right', label: 'Top Right' },
-                        { value: 'bottom-left', label: 'Bottom Left' },
-                        { value: 'bottom-right', label: 'Bottom Right' }
-                      ]} 
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                      <span>Opacity</span>
-                      <span className="text-[#6384A3]">{watermarkOpacity}%</span>
-                    </div>
-                    <input type="range" min="10" max="100" value={watermarkOpacity} onChange={(e) => setWatermarkOpacity(Number(e.target.value))} className="w-full accent-[#6384A3]" />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Compression Accordion */}
-            <div ref={(el) => { panelRefs.current['compression'] = el; }} className={`border border-slate-200 flex-shrink-0 bg-white shadow-sm transition-all relative ${activePanel === 'compression' ? 'rounded-lg z-20' : 'rounded-lg z-0 overflow-hidden'}`}>
-              <button onClick={() => setActivePanel(activePanel === 'compression' ? null : 'compression')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activePanel === 'compression' ? 'rounded-t-lg' : 'rounded-lg'}`}>
-                <SlidersHorizontal className="w-4 h-4 text-[#6384A3]" /> Doc Compression
-              </button>
-              {activePanel === 'compression' && (
-                <div className="p-4 space-y-4 border-t border-slate-100 rounded-b-lg">
-                  <label className="flex items-center gap-2 text-xs font-bold text-slate-700 uppercase tracking-wider cursor-pointer">
-                    <input type="checkbox" checked={enableCompression} onChange={(e) => setEnableCompression(e.target.checked)} className="w-4 h-4 accent-[#6384A3] rounded" />
-                    Force File Shrink
-                  </label>
-                  {enableCompression ? (
-                    <div className="space-y-3 animate-in fade-in pt-2 border-t border-slate-100 mt-2">
-                      <div className="space-y-1">
-                        <div className="flex justify-between text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                          <span>JPEG Quality</span>
-                          <span className="text-[#6384A3]">{compressionQuality}%</span>
-                        </div>
-                        <input type="range" min="10" max="100" value={compressionQuality} onChange={(e) => setCompressionQuality(Number(e.target.value))} className="w-full accent-[#6384A3]" />
-                      </div>
-                      
-                      <div className="space-y-1 pt-1">
-                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">Max Resolution (PPI)</label>
-                        <CustomDropdown 
-                          value={ppiMode} 
-                          onChange={(val) => setPpiMode(val)} 
-                          direction="up"
-                          options={[
-                            { value: '72', label: '72 PPI (Web / Smallest)' },
-                            { value: '150', label: '150 PPI (Medium)' },
-                            { value: '300', label: '300 PPI (Print / High)' },
-                            { value: '0', label: 'Original Resolution' },
-                            { value: 'custom', label: 'Custom PPI Range' }
-                          ]} 
-                        />
-                        {ppiMode === 'custom' && (
-                          <div className="space-y-1 mt-3 p-2 bg-slate-50 border border-slate-100 rounded">
-                            <div className="flex justify-between text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                              <span>Custom PPI</span>
-                              <span className="text-[#6384A3]">{customPPI} PPI</span>
-                            </div>
-                            <input 
-                              type="range" 
-                              min="10" 
-                              max="1200" 
-                              value={customPPI} 
-                              onChange={(e) => setCustomPPI(Number(e.target.value))} 
-                              className="w-full accent-[#6384A3]" 
-                            />
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="pt-1">
-                        <label className="flex items-center gap-2 text-[10px] font-bold text-slate-600 uppercase tracking-widest cursor-pointer">
-                          <input 
-                            type="checkbox" 
-                            checked={compressionGrayscale} 
-                            onChange={(e) => setCompressionGrayscale(e.target.checked)} 
-                            className="w-3.5 h-3.5 accent-[#6384A3] rounded cursor-pointer" 
-                          />
-                          Convert to Grayscale
-                        </label>
-                      </div>
-                      <p className="text-[9px] text-slate-400 leading-tight">These settings apply to PDF exports to significantly reduce file size.</p>
-                    </div>
-                  ) : (
-                    <p className="text-[10px] text-slate-500">Currently exporting visually lossless JPEGs for optimal quality/size balance.</p>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Export Format Accordion */}
-            <div ref={(el) => { panelRefs.current['export'] = el; }} className={`border border-slate-200 flex-shrink-0 bg-white shadow-sm transition-all relative mb-4 ${activePanel === 'export' ? 'rounded-lg z-20' : 'rounded-lg z-0 overflow-hidden'}`}>
-              <button onClick={() => setActivePanel(activePanel === 'export' ? null : 'export')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activePanel === 'export' ? 'rounded-t-lg' : 'rounded-lg'}`}>
-                <Type className="w-4 h-4 text-[#6384A3]" /> Format & Export
-              </button>
-              {activePanel === 'export' && (
-                <div className="p-4 bg-white border-t border-slate-100 space-y-4 rounded-b-lg">
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Main Export Format</label>
-                    <CustomDropdown 
-                      value={exportFormat} 
-                      onChange={setExportFormat} 
-                      direction="up"
-                      options={[
-                        { value: 'pdf', label: 'PDF Document (.pdf)' },
-                        { value: 'word', label: 'Word Document (.doc)' },
-                        { value: 'images', label: 'Image Archive (.zip)' },
-                      ]} 
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-
+            {renderSidebarAccordions(false)}
           </div>
 
           {/* Global Actions (Sticky Bottom) */}
@@ -1689,18 +1935,20 @@ export default function PdfEditor() {
               <h3 className="text-sm font-bold text-slate-700">Drag & drop PDFs or Images here</h3>
               <p className="text-xs text-slate-500 mt-1">Pro Tip: Drop multiple files to merge them</p>
             </div>
-          ) : activePanel === 'signature' && pages.length > 0 && sigPageTarget ? (
-            // Live Signature Preview & Positioning (Right Side)
+          ) : (
+            // Live Preview & DND Grid Shared Area
             <div className="flex-1 flex flex-col bg-slate-100 rounded-xl border border-slate-200 relative select-none animate-in fade-in h-full min-h-[400px] overflow-hidden">
               
               {/* Top Action Badges (Z-50) */}
-              <div className="absolute top-3 left-3 z-50 bg-white/90 px-3 py-1.5 rounded shadow-sm text-[10px] font-bold text-slate-600 uppercase tracking-widest flex items-center gap-2 border border-slate-200 pointer-events-none">
-                <Move className="w-3.5 h-3.5" /> Select & Drag Signature
-              </div>
+              {!showViewerGrid && signatures && signatures.length > 0 && (
+                 <div className="absolute top-3 left-3 z-50 bg-white/90 px-3 py-1.5 rounded shadow-sm text-[10px] font-bold text-slate-600 uppercase tracking-widest flex items-center gap-2 border border-slate-200 pointer-events-none">
+                   <Move className="w-3.5 h-3.5" /> Drag Signature
+                 </div>
+              )}
 
-              <div className="absolute top-3 right-3 z-50 pointer-events-auto">
+              <div className="absolute top-3 right-3 z-50 pointer-events-auto flex items-center gap-2">
                 <button
-                  onClick={() => setShowSigModal(true)}
+                  onClick={enterFullscreen}
                   className="bg-white/90 hover:bg-white text-slate-700 px-3 py-1.5 rounded shadow-sm text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 border border-slate-200 transition-colors"
                   title="Open Full Screen"
                 >
@@ -1710,109 +1958,154 @@ export default function PdfEditor() {
 
               {renderPaginationOverlay()}
 
-              {/* PDF Viewer Container (Padded to strictly prevent image overlap with top/bottom UI) */}
+              {/* Viewer Container */}
               <div className="flex-1 overflow-hidden relative touch-none px-4 pt-16 pb-20 w-full h-full flex items-center justify-center">
                 {showViewerGrid ? (
-                  <div className="absolute inset-0 z-40 bg-slate-100 overflow-y-auto px-4 pt-16 pb-20 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 animate-in fade-in">
-                    {pages.map((p, idx) => (
-                      <div key={p.id} onClick={() => { setPreviewPageIndex(idx); setShowViewerGrid(false); }} className={`cursor-pointer border-2 rounded-lg overflow-hidden aspect-[3/4] relative transition-colors bg-white shadow-sm ${previewPageIndex === idx ? 'border-[#6384A3] ring-2 ring-[#6384A3]/30' : 'border-transparent hover:border-slate-300'}`}>
-                        <img src={p.url} alt={`Thumb ${idx+1}`} className="w-full h-full object-contain" style={{ transform: `rotate(${p.rotation + p.fineRotation}deg)` }} />
-                        <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded">Page {idx + 1}</div>
-                        {signatures.some(sig => shouldApplySignature(idx, sig.applyMode, sig.customPages)) && (
-                          <div className="absolute top-1 right-1 bg-[#6384A3] text-white text-[9px] px-1.5 py-0.5 rounded shadow">Signed</div>
-                        )}
-                      </div>
-                    ))}
+                  // DND Layout Grid
+                  <div className="absolute inset-0 z-40 bg-slate-100 overflow-y-auto px-4 pt-16 pb-24 custom-scrollbar">
+                    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                      <SortableContext items={pages.map(p => p.id)} strategy={rectSortingStrategy}>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 lg:gap-6 pb-6">
+                          {pages.map((page, index) => (
+                            <SortablePageItem 
+                              key={page.id} 
+                              id={page.id} 
+                              url={page.url} 
+                              index={index}
+                              rotation={page.rotation}
+                              fineRotation={page.fineRotation || 0}
+                              scale={page.scale || 1}
+                              brightness={page.brightness}
+                              contrast={page.contrast}
+                              sharpen={page.sharpen || 0}
+                              grayscale={page.grayscale}
+                              onRemove={removePage} 
+                              onRotate={rotatePage}
+                              onEdit={handleEditPage}
+                              onView={(id) => {
+                                const idx = pages.findIndex(p => p.id === id);
+                                if(idx !== -1) {
+                                  setPreviewPageIndex(idx);
+                                  setShowViewerGrid(false);
+                                }
+                              }}
+                            />
+                          ))}
+                          
+                          {/* Add More Dropzone Inline */}
+                          <div {...getRootProps()} className={`aspect-[3/4] border-2 border-dashed rounded-lg flex flex-col items-center justify-center cursor-pointer transition-colors p-2 text-center ${isDragActive ? 'border-[#6384A3] bg-blue-50' : 'border-slate-200 hover:border-[#6384A3] hover:bg-slate-50'}`}>
+                            <input {...getInputProps()} />
+                            <span className="text-2xl text-slate-400 font-light mb-1">+</span>
+                            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Merge File</span>
+                          </div>
+                        </div>
+                      </SortableContext>
+                    </DndContext>
                   </div>
                 ) : (
+                  // Single Page Fast Preview
                   <div
                     ref={rightSideSigRef}
-                    className="relative shadow-none bg-slate-50 touch-none inline-flex max-w-full max-h-full"
+                    className="relative shadow-none bg-slate-50 touch-none inline-flex max-w-full max-h-full group"
                     onPointerDown={() => setOpenMenuSigId(null)}
                     onPointerMove={handlePointerMoveSig}
                     onPointerUp={handlePointerUpSig}
                     onPointerLeave={handlePointerUpSig}
                   >
-                    {isGeneratingSigPreview ? (
-                      <div className="flex flex-col items-center justify-center h-[50vh] w-[30vh] text-slate-400">
-                         <svg className="animate-spin w-8 h-8 text-[#6384A3] mb-4" fill="none" viewBox="0 0 24 24">
-                           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                         </svg>
-                         <span className="text-[10px] uppercase tracking-widest font-bold">Rendering View...</span>
+                    {/* Integrated Tools in Single Page Preview */}
+                    {sigPageTarget && (
+                      <div className="absolute top-4 left-4 z-50 flex flex-col gap-2 pointer-events-auto opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); rotatePage(sigPageTarget.id) }} 
+                          className="bg-slate-800/90 text-white p-2 rounded-full shadow hover:bg-black transition-colors"
+                          title="Rotate 90°"
+                        >
+                          <RotateCw className="w-4 h-4"/>
+                        </button>
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); handleEditPage(sigPageTarget.id); }} 
+                          className="bg-[#6384A3]/90 text-white p-2 rounded-full shadow hover:bg-[#4f6a83] transition-colors"
+                          title="Page Settings"
+                        >
+                          <Edit3 className="w-4 h-4"/>
+                        </button>
+                        <button 
+                          onClick={(e) => { 
+                            e.stopPropagation(); 
+                            removePage(sigPageTarget.id);
+                            if (pages.length <= 1) setShowViewerGrid(true); 
+                          }} 
+                          className="bg-red-500/90 text-white p-2 rounded-full shadow hover:bg-red-600 transition-colors"
+                          title="Delete Page"
+                        >
+                          <Trash2 className="w-4 h-4"/>
+                        </button>
                       </div>
-                    ) : sigPreviewUrl ? (
+                    )}
+
+                    {/* Fast Direct CSS Render for Smoothness */}
+                    {sigPageTarget && (
                       <>
                         <img 
-                          src={sigPreviewUrl} 
-                          className="block pointer-events-none" 
-                          style={{ maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto', objectFit: 'contain' }}
-                          alt="Placement Target" 
+                          src={sigPageTarget.url} 
+                          className="block pointer-events-none bg-white transition-transform duration-75 shadow-sm" 
+                          style={{ 
+                            maxWidth: '100%', 
+                            maxHeight: '100%', 
+                            width: 'auto', 
+                            height: 'auto', 
+                            objectFit: 'contain',
+                            transform: `rotate(${sigPageTarget.rotation + (sigPageTarget.fineRotation || 0)}deg) scale(${activePanel === 'page-edit' ? sigPageTarget.scale || 1 : 1})`,
+                            filter: `${sigPageTarget.sharpen > 0 ? `url(#sharpen-${sigPageTarget.id}) ` : ''}brightness(${sigPageTarget.brightness ?? 100}%) contrast(${sigPageTarget.contrast ?? 100}%) ${sigPageTarget.grayscale ? 'grayscale(100%)' : ''}`.trim()
+                          }}
+                          alt="Preview" 
                           draggable={false}
                         />
-                        {renderSignatureOverlay('right')}
+                        
+                        <div className="absolute inset-0 pointer-events-none">
+                          {renderSignatureOverlay('right')}
+                        </div>
                       </>
-                    ) : null}
+                    )}
                   </div>
                 )}
               </div>
-            </div>
-          ) : (
-            // DND Page Grid View
-            <div className="flex-1 overflow-y-auto pr-2 animate-in fade-in touch-none">
-              <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-                <SortableContext items={pages.map(p => p.id)} strategy={rectSortingStrategy}>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 lg:gap-6 pb-6">
-                    {pages.map((page, index) => (
-                      <SortablePageItem 
-                        key={page.id} 
-                        id={page.id} 
-                        url={page.url} 
-                        index={index}
-                        rotation={page.rotation}
-                        fineRotation={page.fineRotation || 0}
-                        scale={page.scale || 1}
-                        brightness={page.brightness}
-                        contrast={page.contrast}
-                        grayscale={page.grayscale}
-                        onRemove={removePage} 
-                        onRotate={rotatePage}
-                        onEdit={setEditingPageId}
-                      />
-                    ))}
-                    
-                    {/* Add More Dropzone Inline */}
-                    <div {...getRootProps()} className={`aspect-[3/4] border-2 border-dashed rounded-lg flex flex-col items-center justify-center cursor-pointer transition-colors p-2 text-center ${isDragActive ? 'border-[#6384A3] bg-blue-50' : 'border-slate-200 hover:border-[#6384A3] hover:bg-slate-50'}`}>
-                      <input {...getInputProps()} />
-                      <span className="text-2xl text-slate-400 font-light mb-1">+</span>
-                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Merge PDF</span>
-                    </div>
-                  </div>
-                </SortableContext>
-              </DndContext>
             </div>
           )}
         </div>
       </div>
 
-      {/* Fullscreen Signature Modal */}
-      {showSigModal && sigPageTarget && (
+      {/* Fullscreen Editor / Universal Workspace Mode */}
+      {isFullscreen && pages.length > 0 && sigPageTarget && (
         <div className="fixed inset-0 z-[160] bg-slate-900/95 flex flex-col md:flex-row animate-in fade-in duration-200">
           
-          {/* Settings Sidebar for Modal */}
+          {/* Top Right Close Button (Red Highlighted) */}
+          <button 
+            onClick={() => setIsFullscreen(false)} 
+            className="fixed top-4 right-4 z-[200] bg-red-500 text-white p-2.5 rounded-full shadow-2xl hover:bg-red-600 hover:scale-105 transition-all border-2 border-white/20 flex items-center justify-center group"
+            title="Close Full Screen"
+          >
+            <X className="w-5 h-5 group-hover:rotate-90 transition-transform" />
+          </button>
+
+          {/* Settings Sidebar for Fullscreen */}
           <div className="w-full md:w-80 bg-white md:h-full flex flex-col border-b md:border-b-0 md:border-r border-slate-200 overflow-y-auto shrink-0 z-40">
             <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50 sticky top-0 z-10">
-              <h3 className="text-xs font-bold text-slate-800 uppercase tracking-widest flex items-center gap-2">
-                <PenTool className="w-4 h-4 text-[#6384A3]" /> Signature Studio
-              </h3>
-              <button onClick={() => setShowSigModal(false)} className="text-slate-400 hover:text-red-500 transition-colors">
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-3">
+                <h3 className="text-xs font-bold text-slate-800 uppercase tracking-widest flex items-center gap-2">
+                  <Settings2 className="w-4 h-4 text-[#6384A3]" /> Full Screen Studio
+                </h3>
+                <button onClick={handleUndo} disabled={history.length === 0} className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-200 rounded transition-colors disabled:opacity-30 disabled:hover:bg-transparent" title="Undo Last Action">
+                  <Undo2 className="w-4 h-4" />
+                </button>
+              </div>
             </div>
-            <div className="p-4 space-y-4 overflow-visible">
-              {renderSignatureControls('modal')}
-              <button onClick={() => setShowSigModal(false)} className="w-full mt-4 px-8 py-3 bg-slate-800 hover:bg-black text-white font-bold rounded uppercase tracking-widest text-xs transition-colors shadow-sm">
-                Save & Close
+            <div className="p-4 space-y-4 overflow-visible flex-1">
+              {renderSidebarAccordions(true)}
+            </div>
+            <div className="p-4 border-t border-slate-200 bg-slate-50 sticky bottom-0">
+              <button onClick={() => setIsFullscreen(false)} className="w-full py-3 bg-slate-800 hover:bg-black text-white font-bold rounded uppercase tracking-widest text-xs transition-colors shadow-sm">
+                Save & Close Studio
               </button>
             </div>
           </div>
@@ -1821,7 +2114,7 @@ export default function PdfEditor() {
           <div className="flex-1 relative touch-none select-none bg-slate-100 overflow-hidden flex flex-col">
               
              {/* Zoom Controls Overlay */}
-             <div className="absolute top-4 right-4 z-50 flex gap-1 bg-slate-800/90 p-1.5 rounded-lg backdrop-blur border border-slate-700 shadow-xl">
+             <div className="absolute top-4 right-20 z-50 flex gap-1 bg-slate-800/90 p-1.5 rounded-lg backdrop-blur border border-slate-700 shadow-xl">
                <button onClick={() => setSigZoom(z => Math.max(0.25, z - 0.25))} className="p-2 bg-slate-700 text-white rounded hover:bg-slate-600 transition-colors"><ZoomOut className="w-4 h-4"/></button>
                <div className="flex items-center justify-center px-3 min-w-[4rem] text-xs font-bold text-slate-300 tracking-widest">{Math.round(sigZoom * 100)}%</div>
                <button onClick={() => setSigZoom(z => Math.min(4, z + 0.25))} className="p-2 bg-slate-700 text-white rounded hover:bg-slate-600 transition-colors"><ZoomIn className="w-4 h-4"/></button>
@@ -1829,7 +2122,7 @@ export default function PdfEditor() {
 
              {renderPaginationOverlay()}
 
-             {/* Modal PDF Viewer Container (Padded to strictly prevent image overlap with UI) */}
+             {/* Modal PDF Viewer Container */}
              <div className="flex-1 overflow-auto relative w-full h-full z-10 px-4 pt-20 pb-24 md:px-8 md:pt-20 md:pb-24 flex custom-scrollbar">
                {showViewerGrid ? (
                  <div className="absolute inset-0 z-40 bg-slate-900/95 overflow-y-auto px-4 pt-20 pb-24 md:px-8 md:pt-20 md:pb-24 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 animate-in fade-in">
@@ -1837,7 +2130,7 @@ export default function PdfEditor() {
                      <div key={p.id} onClick={() => { setPreviewPageIndex(idx); setShowViewerGrid(false); }} className={`cursor-pointer border-2 rounded-lg overflow-hidden aspect-[3/4] relative transition-colors bg-white shadow-xl ${previewPageIndex === idx ? 'border-blue-400 ring-2 ring-blue-400' : 'border-transparent hover:border-slate-500'}`}>
                        <img src={p.url} alt={`Thumb ${idx+1}`} className="w-full h-full object-contain bg-slate-800" style={{ transform: `rotate(${p.rotation + p.fineRotation}deg)` }} />
                        <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded">Page {idx + 1}</div>
-                       {signatures.some(sig => shouldApplySignature(idx, sig.applyMode, sig.customPages)) && (
+                       {signatures && signatures.length > 0 && signatures.some(sig => shouldApplySignature(idx, sig.applyMode, sig.customPages)) && (
                          <div className="absolute top-1 right-1 bg-blue-500 text-white text-[9px] px-1.5 py-0.5 rounded shadow">Signed</div>
                        )}
                      </div>
@@ -1847,183 +2140,60 @@ export default function PdfEditor() {
                  <div className="m-auto flex items-center justify-center min-w-max min-h-max transition-all">
                    <div 
                      ref={modalSigRef}
-                     className="relative shadow-2xl bg-white touch-none inline-block"
+                     className="relative shadow-2xl bg-white touch-none inline-block group"
                      onPointerDown={() => setOpenMenuSigId(null)}
                      onPointerMove={handlePointerMoveSig}
                      onPointerUp={handlePointerUpSig}
                      onPointerLeave={handlePointerUpSig}
                    >
-                     {isGeneratingSigPreview ? (
-                       <div className="flex flex-col items-center justify-center h-[70vh] w-[50vh] text-slate-400">
-                          <svg className="animate-spin w-8 h-8 text-[#6384A3] mb-4" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                          </svg>
-                          <span className="text-[10px] uppercase tracking-widest font-bold">Rendering View...</span>
-                       </div>
-                     ) : sigPreviewUrl ? (
-                       <>
-                         <img 
-                           src={sigPreviewUrl} 
-                           className="block pointer-events-none" 
-                           style={{ height: `${75 * sigZoom}vh`, width: 'auto', maxWidth: 'none' }}
-                           alt="Placement Target" 
-                           draggable={false}
-                         />
-                         {renderSignatureOverlay('modal')}
-                       </>
-                     ) : null}
+                     {/* Tools Overlay in Modal Preview */}
+                     <div className="absolute top-4 left-4 z-50 flex flex-col gap-2 pointer-events-auto opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); rotatePage(sigPageTarget.id) }} 
+                          className="bg-slate-800/90 text-white p-2 rounded-full shadow hover:bg-black transition-colors"
+                          title="Rotate 90°"
+                        >
+                          <RotateCw className="w-4 h-4"/>
+                        </button>
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); setActivePanel('page-edit') }} 
+                          className="bg-[#6384A3]/90 text-white p-2 rounded-full shadow hover:bg-[#4f6a83] transition-colors"
+                          title="Page Settings"
+                        >
+                          <Edit3 className="w-4 h-4"/>
+                        </button>
+                      </div>
+
+                     {/* Fast Direct CSS Render for Smoothness */}
+                     <img 
+                       src={sigPageTarget.url} 
+                       className="block pointer-events-none bg-white transition-transform duration-75" 
+                       style={{ 
+                         height: activePanel === 'page-edit' ? '80vh' : `${75 * sigZoom}vh`, 
+                         width: 'auto', 
+                         maxWidth: 'none',
+                         transform: `rotate(${sigPageTarget.rotation + (sigPageTarget.fineRotation || 0)}deg) scale(${activePanel === 'page-edit' ? sigPageTarget.scale || 1 : 1})`,
+                         filter: `${sigPageTarget.sharpen > 0 ? `url(#sharpen-${sigPageTarget.id}) ` : ''}brightness(${sigPageTarget.brightness ?? 100}%) contrast(${sigPageTarget.contrast ?? 100}%) ${sigPageTarget.grayscale ? 'grayscale(100%)' : ''}`.trim()
+                       }}
+                       alt="Preview" 
+                       draggable={false}
+                     />
+
+                     {/* Straightener Axis Lines (Visible when editing page attributes) */}
+                     {activePanel === 'page-edit' && (
+                        <div className="absolute inset-0 pointer-events-none border border-blue-500 z-20 flex items-center justify-center mix-blend-difference">
+                          <div className="w-full h-px bg-blue-400 absolute top-1/2 -translate-y-1/2" />
+                          <div className="h-full w-px bg-blue-400 absolute left-1/2 -translate-x-1/2" />
+                        </div>
+                     )}
+                     
+                     <div className="absolute inset-0 pointer-events-none">
+                       {renderSignatureOverlay('modal')}
+                     </div>
                    </div>
                  </div>
                )}
              </div>
-          </div>
-        </div>
-      )}
-
-      {/* Editing Modal (Page Specific Enhancements) */}
-      {editingPageData && (
-        <div className="fixed inset-0 z-[150] bg-slate-900/90 flex flex-col items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="flex justify-between items-center p-4 border-b border-slate-200">
-              <h3 className="text-sm font-bold text-slate-800 uppercase tracking-widest flex items-center gap-2">
-                <Edit3 className="w-4 h-4 text-[#6384A3]" /> Edit Page {pages.findIndex(p => p.id === editingPageData.id) + 1}
-              </h3>
-              <button onClick={() => setEditingPageId(null)} className="text-slate-400 hover:text-red-500 transition-colors">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            
-            {/* Precision Viewport Canvas */}
-            <div className="p-4 sm:p-6 bg-slate-800 flex items-center justify-center relative overflow-hidden" style={{ minHeight: '300px' }}>
-              <div className="absolute inset-0 pointer-events-none opacity-10" style={{ backgroundImage: 'linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
-              
-              <div className="relative inline-block border-2 border-transparent overflow-visible shadow-2xl">
-                <img src={editingPageData.url} className="max-h-[35vh] sm:max-h-[40vh] opacity-0 pointer-events-none" alt="" />
-                
-                <div className="absolute inset-0 flex items-center justify-center overflow-visible bg-white">
-                   <img 
-                     src={editingPageData.url} 
-                     className="w-full h-full object-contain max-w-none max-h-none pointer-events-none" 
-                     style={{ 
-                       transform: `rotate(${editingPageData.rotation + editingPageData.fineRotation}deg) scale(${editingPageData.scale || 1})`,
-                       filter: `brightness(${editingPageData.brightness}%) contrast(${editingPageData.contrast}%) ${editingPageData.grayscale ? 'grayscale(100%)' : ''}`.trim()
-                     }} 
-                     alt="Editing preview"
-                   />
-                </div>
-
-                <div className="absolute inset-0 pointer-events-none shadow-[0_0_0_9999px_rgba(0,0,0,0.65)] z-10 border border-white/50" />
-                
-                <div className="absolute inset-0 pointer-events-none border border-[#6384A3] z-20 flex items-center justify-center">
-                   <div className="w-full h-px bg-[#6384A3]/50 absolute top-1/2 -translate-y-1/2" />
-                   <div className="h-full w-px bg-[#6384A3]/50 absolute left-1/2 -translate-x-1/2" />
-                </div>
-              </div>
-            </div>
-            
-            <div className="p-6 space-y-5 bg-white border-t border-slate-200 overflow-y-auto">
-              
-              <div className="grid grid-cols-2 gap-6 pb-2">
-                <div className="space-y-2">
-                  <div className="flex justify-between text-[10px] font-bold text-slate-600 uppercase tracking-widest">
-                    <span>Rotation</span>
-                    <span className="text-[#6384A3]">{editingPageData.fineRotation}°</span>
-                  </div>
-                  <input 
-                    type="range" 
-                    min="-45" 
-                    max="45" 
-                    step="0.5" 
-                    value={editingPageData.fineRotation} 
-                    onChange={(e) => updatePageAttributes(editingPageData.id, { fineRotation: Number(e.target.value) })} 
-                    className="w-full accent-[#6384A3]" 
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <div className="flex justify-between text-[10px] font-bold text-slate-600 uppercase tracking-widest">
-                    <span>Zoom</span>
-                    <span className="text-[#6384A3]">{(editingPageData.scale || 1).toFixed(2)}x</span>
-                  </div>
-                  <input 
-                    type="range" 
-                    min="0.5" 
-                    max="3" 
-                    step="0.05" 
-                    value={editingPageData.scale || 1} 
-                    onChange={(e) => updatePageAttributes(editingPageData.id, { scale: Number(e.target.value) })} 
-                    className="w-full accent-[#6384A3]" 
-                  />
-                </div>
-              </div>
-
-              <div className="pt-3 border-t border-slate-100">
-                <h4 className="text-[10px] font-bold text-slate-800 uppercase tracking-widest mb-3">Enhancements (This Page)</h4>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <div className="flex justify-between text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-2">
-                      <span>Brightness</span>
-                      <span className="text-[#6384A3]">{editingPageData.brightness}%</span>
-                    </div>
-                    <input type="range" min="50" max="150" value={editingPageData.brightness} onChange={(e) => updatePageAttributes(editingPageData.id, { brightness: Number(e.target.value) })} className="w-full accent-[#6384A3]" />
-                  </div>
-                  <div>
-                    <div className="flex justify-between text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-2">
-                      <span>Contrast</span>
-                      <span className="text-[#6384A3]">{editingPageData.contrast}%</span>
-                    </div>
-                    <input type="range" min="50" max="150" value={editingPageData.contrast} onChange={(e) => updatePageAttributes(editingPageData.id, { contrast: Number(e.target.value) })} className="w-full accent-[#6384A3]" />
-                  </div>
-                </div>
-                
-                <div className="flex flex-col gap-2 mt-4">
-                  <label className="flex items-center gap-2 text-[10px] font-bold text-slate-700 uppercase tracking-widest cursor-pointer">
-                    <input type="checkbox" checked={editingPageData.grayscale} onChange={(e) => updatePageAttributes(editingPageData.id, { grayscale: e.target.checked })} className="w-3.5 h-3.5 accent-[#6384A3] rounded" />
-                    Black & White (Grayscale)
-                  </label>
-                </div>
-
-                <div className="pt-4 border-t border-slate-100 mt-4 space-y-2">
-                  <label className="text-[10px] font-bold text-slate-700 uppercase tracking-widest block">AI Background Removal</label>
-                  <CustomDropdown 
-                    value={pageBgModel} 
-                    onChange={setPageBgModel} 
-                    direction="up"
-                    options={[
-                      { value: 'briaai/RMBG-1.4', label: 'Light' },
-                      { value: 'isnet_fp16', label: 'Standard ' },
-                      { value: 'isnet', label: 'Max' }
-                    ]} 
-                  />
-                  <button 
-                    onClick={() => handleRemovePageBg(editingPageData.id, editingPageData.url)} 
-                    disabled={isProcessing} 
-                    className="w-full py-2 bg-[#6384A3]/10 text-[#6384A3] border border-[#6384A3]/20 font-bold text-[9px] uppercase tracking-widest rounded hover:bg-[#6384A3]/20 transition-colors flex items-center justify-center gap-2"
-                  >
-                    <Wand2 className="w-3 h-3" /> Remove Background
-                  </button>
-                </div>
-              </div>
-
-              <div className="flex gap-2 pt-4 border-t border-slate-100">
-                <button 
-                  onClick={() => {
-                    updatePageAttributes(editingPageData.id, { url: editingPageData.originalUrl, fineRotation: 0, scale: 1, brightness: 100, contrast: 100, grayscale: false });
-                    showToast('Page reset to original');
-                  }} 
-                  className="flex-[0.5] py-2.5 px-4 text-xs font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50 uppercase tracking-widest"
-                >
-                  Reset
-                </button>
-                <button 
-                  onClick={() => { setEditingPageId(null); showToast('Enhancements applied'); }} 
-                  className="flex-1 py-2.5 text-xs font-bold text-white bg-[#6384A3] rounded hover:bg-[#4f6a83] uppercase tracking-widest"
-                >
-                  Done
-                </button>
-              </div>
-            </div>
           </div>
         </div>
       )}
