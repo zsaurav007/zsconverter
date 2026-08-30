@@ -19,6 +19,7 @@ export default function QrGenerator() {
   const [text, setText] = useState('https://zsconverter.vercel.app/')
   const [qrUrl, setQrUrl] = useState<string>('')
   const [darkColor, setDarkColor] = useState('#000000')
+  const [logoImage, setLogoImage] = useState<string | null>(null)
 
   // Scanner State
   const [scanImage, setScanImage] = useState<string | null>(null)
@@ -36,16 +37,45 @@ export default function QrGenerator() {
     if (mode === 'generate') {
       generateQR()
     }
-  }, [text, darkColor, mode])
+  }, [text, darkColor, logoImage, mode])
 
   const generateQR = async () => {
     try {
-      const url = await QRCode.toDataURL(text || ' ', {
+      // Use higher error correction if a logo is present to ensure it remains scannable
+      const errorCorrectionLevel = logoImage ? 'H' : 'M'
+
+      const canvas = document.createElement('canvas')
+      await QRCode.toCanvas(canvas, text || ' ', {
         width: 1024,
         margin: 2,
-        color: { dark: darkColor, light: '#ffffff' }
+        color: { dark: darkColor, light: '#ffffff' },
+        errorCorrectionLevel
       })
-      setQrUrl(url)
+
+      // Draw uploaded logo onto the canvas if it exists
+      if (logoImage) {
+        const ctx = canvas.getContext('2d')
+        if (ctx) {
+          const img = new Image()
+          img.crossOrigin = 'anonymous'
+          img.src = logoImage
+          await new Promise((resolve, reject) => { 
+            img.onload = resolve
+            img.onerror = reject
+          })
+
+          const logoSize = canvas.width * 0.25 // Logo takes up 25% of the code
+          const offset = (canvas.width - logoSize) / 2
+
+          // Draw a white background square to ensure the logo is visible and scannable
+          ctx.fillStyle = '#ffffff'
+          ctx.fillRect(offset - 16, offset - 16, logoSize + 32, logoSize + 32)
+          
+          ctx.drawImage(img, offset, offset, logoSize, logoSize)
+        }
+      }
+
+      setQrUrl(canvas.toDataURL('image/png'))
     } catch (err) {
       console.error(err)
     }
@@ -127,17 +157,24 @@ export default function QrGenerator() {
     setCameraError(null)
     setScannedResult(null)
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+      let stream: MediaStream;
+      try {
+        // Broadened constraints to safely prompt on all iOS/Android devices
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } })
+      } catch (e) {
+        // Fallback if environment explicit facing mode fails
+        stream = await navigator.mediaDevices.getUserMedia({ video: true })
+      }
       
-      // videoRef is now guaranteed to exist because it's no longer conditionally mounted
       if (videoRef.current) {
         videoRef.current.srcObject = stream
-        videoRef.current.play()
+        videoRef.current.setAttribute('playsinline', 'true') // Crucial for iOS webkit
+        await videoRef.current.play()
         setIsCameraActive(true)
         requestAnimationFrame(scanCameraFrame)
       }
     } catch (err) {
-      setCameraError("Camera access denied or unavailable.")
+      setCameraError("Camera access denied or unavailable. Please check your browser permissions.")
       setIsCameraActive(false)
     }
   }
@@ -232,6 +269,37 @@ export default function QrGenerator() {
               </div>
             </div>
 
+            <div className="space-y-3 flex-shrink-0 pt-2 lg:pt-4 border-t border-slate-200 animate-in fade-in">
+              <div className="flex justify-between items-center">
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Center Logo / Image</label>
+                {logoImage && (
+                  <button onClick={() => setLogoImage(null)} className="text-[9px] text-red-500 font-bold uppercase hover:underline tracking-widest">
+                    Remove
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-3">
+                {logoImage ? (
+                  <img src={logoImage} alt="Logo" className="w-10 h-10 rounded border border-slate-200 object-cover bg-white" />
+                ) : (
+                  <div className="w-10 h-10 rounded border border-dashed border-slate-300 flex items-center justify-center bg-slate-50">
+                    <ImageIcon className="w-4 h-4 text-slate-400" />
+                  </div>
+                )}
+                <button onClick={() => document.getElementById('logo-upload')?.click()} className="flex-1 py-2 bg-white border border-slate-200 text-slate-700 font-bold rounded text-[10px] uppercase tracking-widest hover:bg-slate-50 transition-colors shadow-sm">
+                  {logoImage ? 'Change Image' : 'Upload Image'}
+                </button>
+                <input type="file" id="logo-upload" accept="image/*" className="hidden" onChange={(e) => {
+                  if (e.target.files && e.target.files[0]) {
+                    setLogoImage(URL.createObjectURL(e.target.files[0]))
+                  }
+                }} />
+              </div>
+              <p className="text-[9px] text-slate-400 leading-tight">
+                * QR codes can only store text. To share a large file/image, upload it to a cloud drive and paste the link in the text box above. You can upload an image here to embed as a logo.
+              </p>
+            </div>
+
             <div className="mt-auto pt-6 border-t border-slate-200 flex-shrink-0 animate-in fade-in">
               <button onClick={handleDownload} className="w-full py-3 bg-[#6384A3] text-white font-bold rounded-lg hover:bg-[#4f6a83] shadow-md transition-colors flex items-center justify-center gap-2 text-xs uppercase tracking-widest">
                 <Download className="w-4 h-4"/> Download PNG
@@ -240,7 +308,7 @@ export default function QrGenerator() {
           </>
         ) : (
           <div className="flex-1 flex flex-col animate-in fade-in space-y-4">
-             
+              
              {/* Sub-toggle for Scan Method */}
              <div className="flex bg-slate-100 p-1 rounded border border-slate-200">
                <button onClick={() => setScanMethod('file')} className={`flex-1 py-1.5 text-[9px] font-bold uppercase tracking-widest rounded transition-all ${scanMethod === 'file' ? 'bg-white shadow-sm text-[#6384A3]' : 'text-slate-500 hover:text-slate-700'}`}>
@@ -338,13 +406,11 @@ export default function QrGenerator() {
               // Live Camera Viewport
               <div className="flex-1 bg-black rounded-xl overflow-hidden relative flex items-center justify-center border border-slate-200 shadow-inner group">
                 
-                {/* 
-                  Video element MUST be mounted for the Ref to capture the DOM node immediately. 
-                  We visually hide it until it's active. PlaysInline and Muted are vital for iOS.
-                */}
+                {/* AutoPlay, playsInline, and muted are crucial for iOS camera functionality */}
                 <video 
                   ref={videoRef} 
                   className={`w-full h-full object-cover ${isCameraActive ? 'block' : 'hidden'}`} 
+                  autoPlay
                   playsInline 
                   muted 
                 />
