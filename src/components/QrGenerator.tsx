@@ -41,9 +41,7 @@ export default function QrGenerator() {
 
   const generateQR = async () => {
     try {
-      // Use higher error correction if a logo is present to ensure it remains scannable
       const errorCorrectionLevel = logoImage ? 'H' : 'M'
-
       const canvas = document.createElement('canvas')
       await QRCode.toCanvas(canvas, text || ' ', {
         width: 1024,
@@ -52,7 +50,6 @@ export default function QrGenerator() {
         errorCorrectionLevel
       })
 
-      // Draw uploaded logo onto the canvas if it exists
       if (logoImage) {
         const ctx = canvas.getContext('2d')
         if (ctx) {
@@ -64,13 +61,11 @@ export default function QrGenerator() {
             img.onerror = reject
           })
 
-          const logoSize = canvas.width * 0.25 // Logo takes up 25% of the code
+          const logoSize = canvas.width * 0.25 
           const offset = (canvas.width - logoSize) / 2
 
-          // Draw a white background square to ensure the logo is visible and scannable
           ctx.fillStyle = '#ffffff'
           ctx.fillRect(offset - 16, offset - 16, logoSize + 32, logoSize + 32)
-          
           ctx.drawImage(img, offset, offset, logoSize, logoSize)
         }
       }
@@ -159,16 +154,18 @@ export default function QrGenerator() {
     try {
       let stream: MediaStream;
       try {
-        // Broadened constraints to safely prompt on all iOS/Android devices
         stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } })
       } catch (e) {
-        // Fallback if environment explicit facing mode fails
         stream = await navigator.mediaDevices.getUserMedia({ video: true })
       }
       
       if (videoRef.current) {
         videoRef.current.srcObject = stream
-        videoRef.current.setAttribute('playsinline', 'true') // Crucial for iOS webkit
+        // Forcibly inject iOS compatible attributes
+        videoRef.current.setAttribute('playsinline', 'true')
+        videoRef.current.setAttribute('autoplay', 'true')
+        videoRef.current.setAttribute('muted', 'true')
+        
         await videoRef.current.play()
         setIsCameraActive(true)
         requestAnimationFrame(scanCameraFrame)
@@ -181,7 +178,7 @@ export default function QrGenerator() {
 
   const scanCameraFrame = useCallback(() => {
     const video = videoRef.current
-    if (!video || !video.srcObject) return // Stop loop if camera was turned off
+    if (!video || !video.srcObject) return 
 
     if (video.readyState === video.HAVE_ENOUGH_DATA) {
       const canvas = document.createElement('canvas')
@@ -197,15 +194,13 @@ export default function QrGenerator() {
         if (code) {
           setScannedResult(code.data)
           stopCamera()
-          return // Found code, kill loop
+          return 
         }
       }
     }
-    // Continue loop
     requestAnimationFrame(scanCameraFrame)
   }, [stopCamera])
 
-  // Stop camera when unmounting or switching modes
   useEffect(() => {
     if (mode === 'generate' || scanMethod === 'file') {
       stopCamera()
@@ -230,8 +225,95 @@ export default function QrGenerator() {
   return (
     <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col lg:flex-row h-auto lg:h-[650px] min-h-[650px]">
       
-      {/* Sidebar Settings */}
-      <div className="w-full lg:w-80 h-auto lg:h-full bg-slate-50 p-4 lg:p-6 border-b lg:border-b-0 lg:border-r border-slate-200 flex flex-col gap-4 lg:gap-6 overflow-y-auto">
+      {/* Main Visual Area (Now order-1 on mobile so it stays visible at the top) */}
+      <div className="flex-1 p-4 md:p-8 bg-slate-100 flex flex-col items-center justify-center min-h-[350px] lg:min-h-full order-1 lg:order-2">
+        {mode === 'generate' ? (
+          <>
+            {qrUrl ? (
+              <div className="bg-white p-6 rounded-2xl shadow-xl flex flex-col items-center gap-4 border border-slate-200 w-full max-w-[300px] lg:max-w-full animate-in zoom-in-95">
+                <img src={qrUrl} alt="Generated QR Code" className="w-full max-w-[256px] h-auto object-contain" />
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest truncate w-full text-center">
+                  {text || 'Empty'}
+                </p>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center text-slate-400">
+                <QrCode className="w-12 h-12 mb-4 opacity-50" />
+                <p className="text-sm font-bold">Waiting for input...</p>
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="w-full h-full flex flex-col relative">
+            
+            {scanMethod === 'file' ? (
+              <div {...getRootProps()} className={`flex-1 w-full min-h-[300px] border-2 border-dashed rounded-xl flex flex-col items-center justify-center text-center cursor-pointer transition-colors p-6 overflow-hidden relative ${isDragActive ? 'border-[#6384A3] bg-blue-50/50' : 'border-slate-300 hover:border-[#6384A3] hover:bg-slate-50'}`}>
+                <input {...getInputProps()} />
+                
+                {scanImage ? (
+                  <img src={scanImage} alt="Uploaded QR" className="max-w-full max-h-full object-contain drop-shadow-md z-10" />
+                ) : (
+                  <div className="z-10 flex flex-col items-center text-slate-500">
+                    <UploadCloud className={`w-10 h-10 lg:w-12 lg:h-12 mb-4 ${isDragActive ? 'text-[#6384A3]' : 'text-slate-300'}`} />
+                    <h3 className="text-sm lg:text-base font-bold text-slate-700 mb-1">Upload QR Code Image</h3>
+                    <p className="text-xs text-slate-400 mt-1">Drag & drop or tap to browse</p>
+                  </div>
+                )}
+
+                {isScanning && (
+                  <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-20 flex flex-col items-center justify-center">
+                    <ScanLine className="w-8 h-8 text-[#6384A3] animate-pulse mb-3" />
+                    <p className="text-[10px] font-bold text-slate-800 uppercase tracking-widest">Scanning Code...</p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              // Live Camera Viewport
+              <div className="flex-1 w-full min-h-[300px] bg-black rounded-xl overflow-hidden relative flex items-center justify-center border border-slate-200 shadow-inner group">
+                
+                <video 
+                  ref={videoRef} 
+                  className={`w-full h-full object-cover ${isCameraActive ? 'block' : 'hidden'}`} 
+                  autoPlay
+                  playsInline 
+                  muted 
+                />
+
+                {!isCameraActive && (
+                   <div className="flex flex-col items-center text-slate-400 z-10 absolute p-4 text-center">
+                     <Camera className="w-10 h-10 lg:w-12 lg:h-12 mb-4 opacity-50 text-white" />
+                     <button onClick={startCamera} className="px-6 py-2.5 bg-[#6384A3] text-white text-xs font-bold uppercase tracking-widest rounded hover:bg-[#4f6a83] transition-colors shadow-lg">
+                       Enable Camera
+                     </button>
+                   </div>
+                )}
+                
+                {isCameraActive && (
+                  <>
+                    <div className="absolute inset-0 z-10 pointer-events-none flex flex-col items-center justify-center">
+                      <div className="w-48 h-48 border-2 border-[#6384A3]/60 relative">
+                        <div className="absolute top-0 left-0 w-4 h-4 border-t-4 border-l-4 border-white" />
+                        <div className="absolute top-0 right-0 w-4 h-4 border-t-4 border-r-4 border-white" />
+                        <div className="absolute bottom-0 left-0 w-4 h-4 border-b-4 border-l-4 border-white" />
+                        <div className="absolute bottom-0 right-0 w-4 h-4 border-b-4 border-r-4 border-white" />
+                        <div className="w-full h-0.5 bg-green-400/80 absolute shadow-[0_0_8px_rgba(74,222,128,1)] animate-[scan_2s_ease-in-out_infinite]" />
+                      </div>
+                      <p className="text-white font-bold text-[10px] uppercase tracking-widest mt-4 drop-shadow-md bg-black/40 px-3 py-1 rounded">Point at QR Code</p>
+                    </div>
+                    <button onClick={stopCamera} className="absolute top-4 right-4 z-20 bg-black/60 text-white p-2 rounded-full hover:bg-red-500 transition-colors opacity-100 lg:opacity-0 group-hover:opacity-100">
+                       <X className="w-5 h-5" />
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+            
+          </div>
+        )}
+      </div>
+
+      {/* Sidebar Settings (Now order-2 on mobile so it sits under the camera) */}
+      <div className="w-full lg:w-80 h-auto lg:h-full bg-slate-50 p-4 lg:p-6 border-t lg:border-t-0 lg:border-l border-slate-200 flex flex-col gap-4 lg:gap-6 overflow-y-auto order-2 lg:order-1">
         <h3 className="text-xs font-bold text-slate-800 uppercase tracking-widest border-b pb-4 flex items-center gap-2 flex-shrink-0">
           <Settings2 className="w-4 h-4"/> QR Studio
         </h3>
@@ -296,7 +378,7 @@ export default function QrGenerator() {
                 }} />
               </div>
               <p className="text-[9px] text-slate-400 leading-tight">
-                * QR codes can only store text. To share a large file/image, upload it to a cloud drive and paste the link in the text box above. You can upload an image here to embed as a logo.
+                * Upload an image to embed it directly as a logo inside your custom QR code.
               </p>
             </div>
 
@@ -356,97 +438,6 @@ export default function QrGenerator() {
                   {scannedResult || cameraError}
                 </div>
              )}
-          </div>
-        )}
-      </div>
-
-      {/* Main Visual Area */}
-      <div className="flex-1 p-6 md:p-8 bg-slate-100 flex flex-col items-center justify-center min-h-[400px] lg:min-h-full">
-        {mode === 'generate' ? (
-          <>
-            {qrUrl ? (
-              <div className="bg-white p-6 rounded-2xl shadow-xl flex flex-col items-center gap-4 border border-slate-200 max-w-full animate-in zoom-in-95">
-                <img src={qrUrl} alt="Generated QR Code" className="w-full max-w-[256px] h-auto object-contain" />
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest truncate w-full max-w-[250px] text-center">
-                  {text || 'Empty'}
-                </p>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center text-slate-400">
-                <QrCode className="w-12 h-12 mb-4 opacity-50" />
-                <p className="text-sm font-bold">Waiting for input...</p>
-              </div>
-            )}
-          </>
-        ) : (
-          <div className="w-full h-full flex flex-col relative">
-            
-            {scanMethod === 'file' ? (
-              <div {...getRootProps()} className={`flex-1 border-2 border-dashed rounded-xl flex flex-col items-center justify-center text-center cursor-pointer transition-colors p-6 overflow-hidden relative ${isDragActive ? 'border-[#6384A3] bg-blue-50/50' : 'border-slate-300 hover:border-[#6384A3] hover:bg-slate-50'}`}>
-                <input {...getInputProps()} />
-                
-                {scanImage ? (
-                  <img src={scanImage} alt="Uploaded QR" className="max-w-full max-h-full object-contain drop-shadow-md z-10" />
-                ) : (
-                  <div className="z-10 flex flex-col items-center text-slate-500">
-                    <UploadCloud className={`w-10 h-10 lg:w-12 lg:h-12 mb-4 ${isDragActive ? 'text-[#6384A3]' : 'text-slate-300'}`} />
-                    <h3 className="text-sm lg:text-base font-bold text-slate-700 mb-1">Upload QR Code Image</h3>
-                    <p className="text-xs text-slate-400 mt-1">Drag & drop or tap to browse</p>
-                  </div>
-                )}
-
-                {isScanning && (
-                  <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-20 flex flex-col items-center justify-center">
-                    <ScanLine className="w-8 h-8 text-[#6384A3] animate-pulse mb-3" />
-                    <p className="text-[10px] font-bold text-slate-800 uppercase tracking-widest">Scanning Code...</p>
-                  </div>
-                )}
-              </div>
-            ) : (
-              // Live Camera Viewport
-              <div className="flex-1 bg-black rounded-xl overflow-hidden relative flex items-center justify-center border border-slate-200 shadow-inner group">
-                
-                {/* AutoPlay, playsInline, and muted are crucial for iOS camera functionality */}
-                <video 
-                  ref={videoRef} 
-                  className={`w-full h-full object-cover ${isCameraActive ? 'block' : 'hidden'}`} 
-                  autoPlay
-                  playsInline 
-                  muted 
-                />
-
-                {!isCameraActive && (
-                   <div className="flex flex-col items-center text-slate-400 z-10 absolute">
-                     <Camera className="w-12 h-12 mb-4 opacity-50 text-white" />
-                     <button onClick={startCamera} className="px-6 py-2.5 bg-[#6384A3] text-white text-xs font-bold uppercase tracking-widest rounded hover:bg-[#4f6a83] transition-colors shadow-lg">
-                       Enable Camera
-                     </button>
-                   </div>
-                )}
-                
-                {isCameraActive && (
-                  <>
-                    {/* Viewfinder Overlay */}
-                    <div className="absolute inset-0 z-10 pointer-events-none flex flex-col items-center justify-center">
-                      <div className="w-48 h-48 border-2 border-[#6384A3]/60 relative">
-                        <div className="absolute top-0 left-0 w-4 h-4 border-t-4 border-l-4 border-white" />
-                        <div className="absolute top-0 right-0 w-4 h-4 border-t-4 border-r-4 border-white" />
-                        <div className="absolute bottom-0 left-0 w-4 h-4 border-b-4 border-l-4 border-white" />
-                        <div className="absolute bottom-0 right-0 w-4 h-4 border-b-4 border-r-4 border-white" />
-                        {/* Animated Scan Line */}
-                        <div className="w-full h-0.5 bg-green-400/80 absolute shadow-[0_0_8px_rgba(74,222,128,1)] animate-[scan_2s_ease-in-out_infinite]" />
-                      </div>
-                      <p className="text-white font-bold text-[10px] uppercase tracking-widest mt-4 drop-shadow-md bg-black/40 px-3 py-1 rounded">Point at QR Code</p>
-                    </div>
-                    {/* Stop Camera Button (Hidden until hover/touch) */}
-                    <button onClick={stopCamera} className="absolute top-4 right-4 z-20 bg-black/60 text-white p-2 rounded-full hover:bg-red-500 transition-colors opacity-100 lg:opacity-0 group-hover:opacity-100">
-                       <X className="w-5 h-5" />
-                    </button>
-                  </>
-                )}
-              </div>
-            )}
-            
           </div>
         )}
       </div>
