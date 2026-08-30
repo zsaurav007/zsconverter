@@ -74,6 +74,8 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
   const previewContainerRef = useRef<HTMLDivElement>(null)
   const [baseRenderDims, setBaseRenderDims] = useState({ w: 0, h: 0 })
 
+  const [showOriginal, setShowOriginal] = useState(false)
+
   // Dynamically calculate the perfect 1:1 screen fit size on load
   useEffect(() => {
     if (imgDims.w === 0 || activeTool !== 'crop') return
@@ -711,7 +713,7 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
     <div className="bg-white w-full rounded-xl border border-slate-200 shadow-sm flex flex-col lg:flex-row h-auto lg:h-[650px] min-h-[650px] overflow-hidden">
       
       {/* Dynamic Preview Area */}
-      <div className="flex-1 bg-slate-100 flex relative group min-h-[400px] lg:min-h-full order-1 lg:order-2 overflow-hidden border-b lg:border-b-0">
+      <div className="flex-1 bg-slate-100 flex relative group min-h-[400px] lg:min-h-full order-1 lg:order-2 overflow-hidden border-b lg:border-b-0 select-none">
         <button onClick={onCancel} className="absolute top-3 right-3 z-50 bg-white/90 text-slate-800 p-2 rounded-full shadow-md hover:bg-red-500 hover:text-white transition-colors" title="Close Image">
           <X className="w-5 h-5" />
         </button>
@@ -721,7 +723,7 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
             backgroundColor: bgType === 'color' ? bgColor : 'transparent',
             backgroundImage: bgType === 'gradient' ? `linear-gradient(${bgGradientDir}, ${bgGradientColor1}, ${bgGradientColor2})` : 'none'
           }}>
-          {bgType === 'image' && bgImage && (
+          {bgType === 'image' && bgImage && !showOriginal && (
             <img src={bgImage} alt="Background" className="w-full h-full object-cover origin-center" style={{ transform: `scale(${bgImageScale / 100})` }} />
           )}
         </div>
@@ -741,6 +743,8 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
                     ref={imgRef} 
                     src={currentImage} 
                     alt="Crop Preview" 
+                    draggable={false}
+                    onContextMenu={(e) => e.preventDefault()}
                     style={{ 
                       width: baseRenderDims.w ? `${baseRenderDims.w * imageZoom}px` : 'auto', 
                       height: baseRenderDims.h ? `${baseRenderDims.h * imageZoom}px` : 'auto',
@@ -753,17 +757,36 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
               </div>
             </div>
           ) : (
-            <div className="w-full h-full flex items-center justify-center p-4">
+            <div className="w-full h-full flex flex-col items-center justify-center p-4 relative">
+              {showOriginal && (
+                <div className="absolute top-4 bg-[#6384A3] text-white text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 rounded-full shadow-md z-50 pointer-events-none animate-in fade-in zoom-in-95">
+                  Original
+                </div>
+              )}
+              
               <img 
-                src={currentImage} 
+                src={showOriginal ? initialImage : currentImage} 
                 alt="Workspace" 
+                draggable={false}
+                onContextMenu={(e) => e.preventDefault()}
+                onPointerDown={() => setShowOriginal(true)}
+                onPointerUp={() => setShowOriginal(false)}
+                onPointerLeave={() => setShowOriginal(false)}
+                onPointerCancel={() => setShowOriginal(false)}
+                className="transition-opacity duration-150 cursor-pointer drop-shadow-md"
                 style={{ 
                   maxWidth: '100%',
                   maxHeight: '100%',
                   objectFit: 'contain',
-                  ...previewStyle 
+                  ...(showOriginal ? {} : previewStyle) 
                 }} 
               />
+
+              {!showOriginal && canUndo && (
+                <div className="absolute bottom-6 bg-slate-900/60 backdrop-blur-sm text-white/90 text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 rounded-full pointer-events-none transition-opacity">
+                  Hold image to compare original
+                </div>
+              )}
             </div>
           )}
         </div>
