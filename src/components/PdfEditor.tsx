@@ -951,7 +951,8 @@ export default function PdfEditor() {
   }
 
   // Drag Placement Handlers
-  const handlePointerDownSig = (ctx: 'right' | 'modal', sigId: string) => { 
+  const handlePointerDownSig = (e: React.PointerEvent, ctx: 'right' | 'modal', sigId: string) => { 
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) {}
     saveHistory(); 
     setIsDraggingSig(true); 
     setDraggingContext(ctx); 
@@ -959,10 +960,17 @@ export default function PdfEditor() {
     setActiveSigId(sigId); 
     setOpenMenuSigId(null);
   }
-  const handlePointerUpSig = () => { setIsDraggingSig(false); setDraggingContext(null); setResizingState(null); setDraggingSigId(null); }
+
+  const handlePointerUpSig = () => { 
+    setIsDraggingSig(false); 
+    setDraggingContext(null); 
+    setResizingState(null); 
+    setDraggingSigId(null); 
+  }
   
   const handleResizeDown = (e: React.PointerEvent, corner: string, ctx: 'right' | 'modal', sigId: string) => {
     e.stopPropagation() 
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) {}
     const sig = signatures.find(s => s.id === sigId)
     if (!sig) return;
     saveHistory(); 
@@ -1029,13 +1037,13 @@ export default function PdfEditor() {
             pointerEvents: isPreview ? 'none' : 'auto'
           }}
         >
-          <div className="relative pointer-events-auto group" onPointerDown={(e) => { if (!isPreview) { e.stopPropagation(); handlePointerDownSig(ctx, sig.id); } }}>
+          <div className="relative pointer-events-auto group" onPointerDown={(e) => { if (!isPreview) { e.stopPropagation(); handlePointerDownSig(e, ctx, sig.id); } }}>
             {sig.mode === 'text' ? (
               <span style={{ fontFamily: sig.font, color: sig.color, fontSize: `${(placement.scale / 100) * 3}rem`, whiteSpace: 'nowrap', display: 'block', padding: '4px' }}>
                 {sig.text || ' '}
               </span>
             ) : sig.imageUrl ? (
-              <img src={sig.imageUrl} alt="Sig" style={{ width: `${placement.scale * 3}px` }} className="mix-blend-multiply block pointer-events-none" />
+              <img src={sig.imageUrl} alt="Sig" style={{ width: `${placement.scale * 3}px`, maxWidth: 'none' }} className="mix-blend-multiply block pointer-events-none max-w-none" />
             ) : (
               <div style={{ width: `${placement.scale * 3}px`, height: '40px' }} /> 
             )}
@@ -2096,7 +2104,7 @@ export default function PdfEditor() {
                       onPointerDown={() => setOpenMenuSigId(null)}
                       onPointerMove={handlePointerMoveSig}
                       onPointerUp={handlePointerUpSig}
-                      onPointerLeave={handlePointerUpSig}
+                      onPointerCancel={handlePointerUpSig}
                       style={{
                          transform: `scale(${0.75})`,
                          transition: 'transform 0.15s ease-out'
@@ -2293,7 +2301,7 @@ export default function PdfEditor() {
                      onPointerDown={() => setOpenMenuSigId(null)}
                      onPointerMove={handlePointerMoveSig}
                      onPointerUp={handlePointerUpSig}
-                     onPointerLeave={handlePointerUpSig}
+                     onPointerCancel={handlePointerUpSig}
                      style={{
                         transform: `scale(${sigZoom})`,
                         transition: 'transform 0.15s ease-out'
