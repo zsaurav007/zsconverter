@@ -27,7 +27,7 @@ const optimizeImageForAI = async (imageSrc: string): Promise<string> => {
   const ctx = canvas.getContext('2d')
   if (!ctx) return imageSrc
 
-  const MAX_DIM = 1200
+  const MAX_DIM = 1500
   let width = img.width
   let height = img.height
   if (width > MAX_DIM || height > MAX_DIM) {
@@ -43,6 +43,121 @@ const optimizeImageForAI = async (imageSrc: string): Promise<string> => {
   return canvas.toDataURL('image/jpeg', 0.95) 
 }
 
+// Multi-pass Document Text Extraction (Sauvola Binarization Algorithm)
+const processDocumentTextExtraction = async (imageUrl: string): Promise<string> => {
+  const img = await createImage(imageUrl);
+  const canvas = document.createElement('canvas');
+  canvas.width = img.width;
+  canvas.height = img.height;
+  const ctx = canvas.getContext('2d')!;
+  ctx.drawImage(img, 0, 0);
+
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = imgData.data;
+  const width = canvas.width;
+  const height = canvas.height;
+
+  // 1. Grayscale luminance calculation
+  const gray = new Float32Array(width * height);
+  for (let i = 0; i < data.length; i += 4) {
+    gray[i / 4] = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+  }
+
+  // 2. Fast Integral Image for Adaptive Local Thresholding
+  const intImg = new Float64Array(width * height);
+  const intSqImg = new Float64Array(width * height);
+
+  for (let y = 0; y < height; y++) {
+    let sum = 0;
+    let sqSum = 0;
+    for (let x = 0; x < width; x++) {
+      const val = gray[y * width + x];
+      sum += val;
+      sqSum += val * val;
+      
+      const prevY = y > 0 ? (y - 1) * width + x : 0;
+      intImg[y * width + x] = (y > 0 ? intImg[prevY] : 0) + sum;
+      intSqImg[y * width + x] = (y > 0 ? intSqImg[prevY] : 0) + sqSum;
+    }
+  }
+
+  // 3. Sauvola Adaptive Thresholding
+  const windowSize = Math.max(15, Math.floor(width / 25)); 
+  const k = 0.3; 
+  const R = 128; 
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const x1 = Math.max(x - windowSize, 0);
+      const x2 = Math.min(x + windowSize, width - 1);
+      const y1 = Math.max(y - windowSize, 0);
+      const y2 = Math.min(y + windowSize, height - 1);
+      const count = (x2 - x1 + 1) * (y2 - y1 + 1);
+
+      const sum = intImg[y2 * width + x2] 
+                - (y1 > 0 ? intImg[(y1 - 1) * width + x2] : 0) 
+                - (x1 > 0 ? intImg[y2 * width + (x1 - 1)] : 0) 
+                + (y1 > 0 && x1 > 0 ? intImg[(y1 - 1) * width + (x1 - 1)] : 0);
+                
+      const sqSum = intSqImg[y2 * width + x2] 
+                - (y1 > 0 ? intSqImg[(y1 - 1) * width + x2] : 0) 
+                - (x1 > 0 ? intSqImg[y2 * width + (x1 - 1)] : 0) 
+                + (y1 > 0 && x1 > 0 ? intSqImg[(y1 - 1) * width + (x1 - 1)] : 0);
+
+      const mean = sum / count;
+      const variance = (sqSum / count) - (mean * mean);
+      const stddev = Math.sqrt(Math.max(variance, 0));
+
+      const threshold = mean * (1 + k * ((stddev / R) - 1));
+      
+      const idx = (y * width + x) * 4;
+      const currentGray = gray[y * width + x];
+
+      if (currentGray < threshold && currentGray < 180) {
+        data[idx] = 0;    
+        data[idx + 1] = 0;
+        data[idx + 2] = 0;
+        data[idx + 3] = 255;
+      } else {
+        data[idx + 3] = 0; 
+      }
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+  return canvas.toDataURL('image/png');
+};
+
+// --- DATA STRUCTURES & FILTERS ---
+type PageItem = { 
+  id: string; 
+  url: string; 
+  originalUrl: string; 
+  isLossless: boolean; 
+  rotation: number; 
+  fineRotation: number; 
+  scale: number;
+  brightness: number;
+  contrast: number;
+  saturation: number;
+  hue: number;
+  grayscale: boolean;
+  sepia: number;
+  sharpen: number;
+}
+
+const getFilterString = (page: PageItem) => {
+  const b = 100 + (page.brightness ?? 0);
+  const c = 100 + (page.contrast ?? 0);
+  const sat = 100 + (page.saturation ?? 0);
+  const hue = page.hue ?? 0;
+  const sep = Math.max(0, page.sepia ?? 0);
+  const gray = page.grayscale ? 100 : 0;
+  const s = (page.sharpen ?? 0) > 0 ? `url(#sharpen-${page.id}) ` : '';
+  
+  return `${s}brightness(${b}%) contrast(${c}%) saturate(${sat}%) hue-rotate(${hue}deg) grayscale(${gray}%) sepia(${sep}%)`.trim();
+}
+
 // --- SORTABLE GRID ITEM ---
 interface SortableItemProps {
   id: string
@@ -53,15 +168,17 @@ interface SortableItemProps {
   scale: number
   brightness: number
   contrast: number
-  sharpen: number
+  saturation: number
+  hue: number
+  sepia: number
   grayscale: boolean
+  sharpen: number
   onRemove: (id: string) => void
   onRotate: (id: string) => void
-  onEdit: (id: string) => void
   onView: (id: string) => void
 }
 
-function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brightness, contrast, sharpen, grayscale, onRemove, onRotate, onEdit, onView }: SortableItemProps) {
+function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brightness, contrast, saturation, hue, sepia, grayscale, sharpen, onRemove, onRotate, onView }: SortableItemProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
   
   const style = {
@@ -73,9 +190,14 @@ function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brigh
   const isRotated = rotation % 180 !== 0
   const imageScale = isRotated ? 0.75 : 1
 
-  const g = grayscale ? 'grayscale(100%)' : ''
-  const s = sharpen > 0 ? `url(#sharpen-${id}) ` : ''
-  const filterStyle = `${s}brightness(${brightness}%) contrast(${contrast}%) ${g}`.trim()
+  const b = 100 + (brightness ?? 0);
+  const c = 100 + (contrast ?? 0);
+  const sat = 100 + (saturation ?? 0);
+  const h = hue ?? 0;
+  const sep = Math.max(0, sepia ?? 0);
+  const gray = grayscale ? 100 : 0;
+  const s = sharpen > 0 ? `url(#sharpen-${id}) ` : '';
+  const filterStyle = `${s}brightness(${b}%) contrast(${c}%) saturate(${sat}%) hue-rotate(${h}deg) grayscale(${gray}%) sepia(${sep}%)`.trim()
 
   return (
     <div 
@@ -86,16 +208,18 @@ function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brigh
       onClick={() => onView(id)}
       className={`relative rounded-lg overflow-hidden border ${isDragging ? 'border-[#6384A3] shadow-2xl scale-105' : 'border-slate-200'} aspect-[3/4] cursor-pointer hover:shadow-md transition-all bg-slate-100 flex items-center justify-center group touch-none`}
     >
-      <div className="w-full h-full flex items-center justify-center overflow-hidden bg-white">
-        <img 
-          src={url} 
-          alt={`Page ${index + 1}`} 
-          className="max-w-full max-h-full object-contain pointer-events-none transition-transform" 
-          style={{ transform: `rotate(${rotation + fineRotation}deg) scale(${imageScale * scale})`, filter: filterStyle || 'none' }}
-        />
+      <div className="w-full h-full flex items-center justify-center overflow-hidden bg-slate-100">
+        <div style={{ transform: `rotate(${rotation + fineRotation}deg) scale(${imageScale * scale})`, transition: 'transform 0.15s ease' }}>
+          <img 
+            src={url} 
+            alt={`Page ${index + 1}`} 
+            className="max-w-full max-h-full object-contain pointer-events-none bg-white shadow-sm" 
+            style={{ filter: filterStyle || 'none' }}
+          />
+        </div>
       </div>
       
-      <div className="absolute top-2 right-2 flex flex-col gap-2 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity z-10">
+      <div className="absolute top-2 right-2 flex flex-col gap-2 opacity-100 z-10">
         <button 
           onPointerDown={(e) => { e.stopPropagation(); onRemove(id) }}
           className="bg-red-500/90 hover:bg-red-600 text-white rounded-full w-8 h-8 lg:w-6 lg:h-6 flex items-center justify-center shadow-md transition-colors"
@@ -110,38 +234,40 @@ function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brigh
         >
           <RotateCw className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
         </button>
-        <button 
-          onPointerDown={(e) => { e.stopPropagation(); onEdit(id) }}
-          className="bg-[#6384A3]/90 hover:bg-[#4f6a83] text-white rounded-full w-8 h-8 lg:w-6 lg:h-6 flex items-center justify-center shadow-md transition-colors"
-          title="Edit Page (Enhance & Straighten)"
-        >
-          <Edit3 className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
-        </button>
       </div>
 
       <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-2 py-0.5 rounded font-bold shadow-sm flex items-center gap-1">
         {index + 1}
-        {(fineRotation !== 0 || scale !== 1 || brightness !== 100 || contrast !== 100 || sharpen > 0 || grayscale) && <span className="text-[#6384A3] ml-1">Edited</span>}
+        {(fineRotation !== 0 || scale !== 1 || brightness !== 0 || contrast !== 0 || grayscale || sepia > 0 || hue !== 0 || saturation !== 0 || sharpen > 0) && <span className="text-[#6384A3] ml-1">Edited</span>}
       </div>
     </div>
   )
 }
 
-// --- MAIN COMPONENT ---
-type PageItem = { 
-  id: string; 
-  url: string; 
-  originalUrl: string; 
-  isLossless: boolean; 
-  rotation: number; 
-  fineRotation: number; 
-  scale: number;
-  brightness: number;
-  contrast: number;
-  sharpen: number;
-  grayscale: boolean;
-}
+// --- SLIDER HELPER ---
+const SliderControl = ({ label, value, min, max, step = 1, onChange, onPointerDown, onPointerUp, unit = "%" }: { label: string, value: number, min: number, max: number, step?: number, onChange: (v: number) => void, onPointerDown?: () => void, onPointerUp?: () => void, unit?: string }) => (
+  <div className="space-y-1.5 w-full">
+    <div className="flex justify-between text-[9px] font-bold text-slate-500 uppercase tracking-widest">
+      <span>{label}</span><span className="text-[#6384A3]">{value > 0 ? '+' : ''}{value}{unit}</span>
+    </div>
+    <input 
+      type="range" 
+      min={min} 
+      max={max} 
+      step={step} 
+      value={value} 
+      onPointerDown={onPointerDown} 
+      onPointerUp={onPointerUp}
+      onPointerLeave={onPointerUp}
+      onTouchStart={onPointerDown}
+      onTouchEnd={onPointerUp}
+      onChange={(e) => onChange(Number(e.target.value))} 
+      className="w-full accent-[#6384A3] h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer" 
+    />
+  </div>
+);
 
+// --- MAIN COMPONENT ---
 type SigPlacement = { x: number, y: number, scale: number, opacity: number }
 
 type SignatureItem = {
@@ -175,6 +301,7 @@ export default function PdfEditor() {
   const [isFullscreen, setIsFullscreen] = useState(false)
   const panelRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const [showViewerGrid, setShowViewerGrid] = useState(false)
+  const [isStraightening, setIsStraightening] = useState(false)
 
   useEffect(() => {
     if (activePanel && panelRefs.current[activePanel]) {
@@ -210,8 +337,8 @@ export default function PdfEditor() {
   // Multiple Signatures State
   const [signatures, setSignatures] = useState<SignatureItem[]>([])
   const [activeSigId, setActiveSigId] = useState<string | null>(null)
-  const [sigBgModel, setSigBgModel] = useState('briaai/RMBG-1.4')
-  const [pageBgModel, setPageBgModel] = useState('briaai/RMBG-1.4')
+  const [sigBgModel, setSigBgModel] = useState('document-advanced')
+  const [pageBgModel, setPageBgModel] = useState('document-advanced')
   
   const [openMenuSigId, setOpenMenuSigId] = useState<string | null>(null)
 
@@ -221,11 +348,8 @@ export default function PdfEditor() {
   const [resizingState, setResizingState] = useState<{ startX: number, startY: number, startScale: number, corner: string, sigId: string } | null>(null)
   
   const [previewPageIndex, setPreviewPageIndex] = useState(0)
-  const [sigZoom, setSigZoom] = useState(1)
+  const [sigZoom, setSigZoom] = useState(0.75) // Default zoom set to 75%
 
-  // Direct Canvas Rendering Refs
-  const inlineCanvasRef = useRef<HTMLCanvasElement>(null)
-  const modalCanvasRef = useRef<HTMLCanvasElement>(null)
   const rightSideSigRef = useRef<HTMLDivElement>(null)
   const modalSigRef = useRef<HTMLDivElement>(null)
 
@@ -266,34 +390,6 @@ export default function PdfEditor() {
       setPreviewPageIndex(pages.length - 1)
     }
   }, [pages.length, previewPageIndex])
-
-  // --- FAST CANAVS RENDERING ---
-  useEffect(() => {
-    let isMounted = true;
-    if (pages.length > 0 && !showViewerGrid) {
-      const target = pages[previewPageIndex];
-      if (target) {
-        const renderTimer = setTimeout(() => {
-          renderPageToCanvas(target, previewPageIndex, false, true).then(offscreenCanvas => {
-            if (isMounted && offscreenCanvas) {
-              if (inlineCanvasRef.current) {
-                inlineCanvasRef.current.width = offscreenCanvas.width;
-                inlineCanvasRef.current.height = offscreenCanvas.height;
-                inlineCanvasRef.current.getContext('2d')?.drawImage(offscreenCanvas, 0, 0);
-              }
-              if (modalCanvasRef.current) {
-                modalCanvasRef.current.width = offscreenCanvas.width;
-                modalCanvasRef.current.height = offscreenCanvas.height;
-                modalCanvasRef.current.getContext('2d')?.drawImage(offscreenCanvas, 0, 0);
-              }
-            }
-          });
-        }, 50);
-        return () => clearTimeout(renderTimer);
-      }
-    }
-    return () => { isMounted = false; }
-  }, [pages, previewPageIndex, cleanWatermarks, showViewerGrid, isFullscreen, activePanel]);
 
   // --- HISTORY LOGIC ---
   const saveHistory = useCallback(() => {
@@ -344,14 +440,8 @@ export default function PdfEditor() {
 
           let compBytes = origBytes;
           if (enableCompression) {
-            const sampleCanvas = await renderPageToCanvas(pages[0], 0, true, true);
-            if (sampleCanvas) {
-              const q = compressionQuality / 100;
-              const blob = await new Promise<Blob | null>(res => sampleCanvas.toBlob(res, 'image/jpeg', q));
-              if (blob) {
-                compBytes = blob.size * pages.length;
-              }
-            }
+            // Simplified dynamic byte generation logic for size estimation
+            compBytes = origBytes * (compressionQuality / 100) * 0.8;
           }
 
           if (isMounted) {
@@ -511,16 +601,9 @@ export default function PdfEditor() {
             const dataUrl = canvas.toDataURL('image/png')
             newPages.push({
               id: `pdf-page-${Date.now()}-${Math.random()}`,
-              url: dataUrl,
-              originalUrl: dataUrl,
-              isLossless: true,
-              rotation: 0,
-              fineRotation: 0,
-              scale: 1,
-              brightness: 100,
-              contrast: 100,
-              sharpen: 0,
-              grayscale: false,
+              url: dataUrl, originalUrl: dataUrl, isLossless: true,
+              rotation: 0, fineRotation: 0, scale: 1, brightness: 0, contrast: 0,
+              saturation: 0, hue: 0, sepia: 0, grayscale: false, sharpen: 0
             })
           }
         } else if (file.type.startsWith('image/')) {
@@ -529,16 +612,9 @@ export default function PdfEditor() {
           const objectUrl = URL.createObjectURL(file)
           newPages.push({
             id: `image-${file.name}-${Date.now()}`,
-            url: objectUrl,
-            originalUrl: objectUrl,
-            isLossless: file.type === 'image/png' || file.type === 'image/webp',
-            rotation: 0,
-            fineRotation: 0,
-            scale: 1,
-            brightness: 100,
-            contrast: 100,
-            sharpen: 0,
-            grayscale: false,
+            url: objectUrl, originalUrl: objectUrl, isLossless: file.type === 'image/png' || file.type === 'image/webp',
+            rotation: 0, fineRotation: 0, scale: 1, brightness: 0, contrast: 0,
+            saturation: 0, hue: 0, sepia: 0, grayscale: false, sharpen: 0
           })
         }
       }
@@ -627,13 +703,22 @@ export default function PdfEditor() {
     if (!imageUrl) return
     setIsProcessing(true)
     setLoadingText('Removing Background from Page...')
-    await new Promise(r => setTimeout(r, 50))
+    await new Promise(r => setTimeout(r, 50)) 
 
     try {
       const optimizedDataUrl = await optimizeImageForAI(imageUrl)
       let removedSuccessfully = false;
 
-      if (pageBgModel === 'briaai/RMBG-1.4') {
+      if (pageBgModel === 'document-advanced') {
+        try {
+          const cleanedDataUrl = await processDocumentTextExtraction(optimizedDataUrl);
+          saveHistory();
+          updatePageAttributes(pageId, { url: cleanedDataUrl });
+          removedSuccessfully = true;
+        } catch (err) {
+          console.warn("Document text extraction failed", err);
+        }
+      } else if (pageBgModel === 'briaai/RMBG-1.4') {
         try {
           const { AutoModel, AutoProcessor, RawImage, env } = await import('@huggingface/transformers');
           
@@ -645,15 +730,9 @@ export default function PdfEditor() {
 
           const processor = await AutoProcessor.from_pretrained(pageBgModel, {
             config: {
-              do_normalize: true,
-              do_pad: false,
-              do_rescale: true,
-              do_resize: true,
-              image_mean: [0.5, 0.5, 0.5],
-              feature_extractor_type: "ImageFeatureExtractor",
-              image_std: [1, 1, 1],
-              resample: 2,
-              rescale_factor: 0.00392156862745098,
+              do_normalize: true, do_pad: false, do_rescale: true, do_resize: true,
+              image_mean: [0.5, 0.5, 0.5], feature_extractor_type: "ImageFeatureExtractor",
+              image_std: [1, 1, 1], resample: 2, rescale_factor: 0.00392156862745098,
               size: { width: 1024, height: 1024 }
             } as any
           });
@@ -705,7 +784,7 @@ export default function PdfEditor() {
       }
 
       if (!removedSuccessfully) {
-        const fallbackModel = pageBgModel === 'briaai/RMBG-1.4' ? 'isnet' : pageBgModel;
+        const fallbackModel = pageBgModel === 'briaai/RMBG-1.4' || pageBgModel === 'document-advanced' ? 'isnet' : pageBgModel;
         const bgConfig: Config = { model: fallbackModel as any, output: { format: "image/png" } }
         
         const blob = await removeBackground(imageUrl, bgConfig) 
@@ -731,7 +810,16 @@ export default function PdfEditor() {
       const optimizedDataUrl = await optimizeImageForAI(imageUrl)
       let removedSuccessfully = false;
 
-      if (sigBgModel === 'briaai/RMBG-1.4') {
+      if (sigBgModel === 'document-advanced') {
+        try {
+          const cleanedDataUrl = await processDocumentTextExtraction(optimizedDataUrl);
+          saveHistory();
+          updateSignature(sigId, { imageUrl: cleanedDataUrl });
+          removedSuccessfully = true;
+        } catch (err) {
+          console.warn("Document text extraction failed", err);
+        }
+      } else if (sigBgModel === 'briaai/RMBG-1.4') {
         try {
           const { AutoModel, AutoProcessor, RawImage, env } = await import('@huggingface/transformers');
           
@@ -743,15 +831,9 @@ export default function PdfEditor() {
 
           const processor = await AutoProcessor.from_pretrained(sigBgModel, {
             config: {
-              do_normalize: true,
-              do_pad: false,
-              do_rescale: true,
-              do_resize: true,
-              image_mean: [0.5, 0.5, 0.5],
-              feature_extractor_type: "ImageFeatureExtractor",
-              image_std: [1, 1, 1],
-              resample: 2,
-              rescale_factor: 0.00392156862745098,
+              do_normalize: true, do_pad: false, do_rescale: true, do_resize: true,
+              image_mean: [0.5, 0.5, 0.5], feature_extractor_type: "ImageFeatureExtractor",
+              image_std: [1, 1, 1], resample: 2, rescale_factor: 0.00392156862745098,
               size: { width: 1024, height: 1024 }
             } as any
           });
@@ -803,7 +885,7 @@ export default function PdfEditor() {
       }
 
       if (!removedSuccessfully) {
-        const fallbackModel = sigBgModel === 'briaai/RMBG-1.4' ? 'isnet' : sigBgModel;
+        const fallbackModel = sigBgModel === 'briaai/RMBG-1.4' || sigBgModel === 'document-advanced' ? 'isnet' : sigBgModel;
         const bgConfig: Config = { model: fallbackModel as any, output: { format: "image/png" } }
         
         const blob = await removeBackground(imageUrl, bgConfig) 
@@ -1071,93 +1153,72 @@ export default function PdfEditor() {
 
     return (
       <div className="space-y-5 animate-in fade-in">
-        <div className="grid grid-cols-2 gap-4 pb-2">
-          <div className="space-y-2">
-            <div className="flex justify-between text-[10px] font-bold text-slate-600 uppercase tracking-widest">
-              <span>Rotation</span>
-              <span className="text-[#6384A3]">{page.fineRotation}°</span>
-            </div>
-            <input 
-              type="range" min="-45" max="45" step="0.5" 
-              value={page.fineRotation} 
-              onPointerDown={saveHistory}
-              onChange={(e) => updatePageAttributes(page.id, { fineRotation: Number(e.target.value) })} 
-              className="w-full accent-[#6384A3]" 
-            />
-          </div>
-
-          <div className="space-y-2">
-            <div className="flex justify-between text-[10px] font-bold text-slate-600 uppercase tracking-widest">
-              <span>Zoom</span>
-              <span className="text-[#6384A3]">{(page.scale || 1).toFixed(2)}x</span>
-            </div>
-            <input 
-              type="range" min="0.5" max="3" step="0.05" 
-              value={page.scale || 1} 
-              onPointerDown={saveHistory}
-              onChange={(e) => updatePageAttributes(page.id, { scale: Number(e.target.value) })} 
-              className="w-full accent-[#6384A3]" 
-            />
-          </div>
+        <div className="grid grid-cols-2 gap-4 pb-4 border-b border-slate-100">
+          <SliderControl 
+            label="Rotation" 
+            value={page.fineRotation} 
+            min={-45} max={45} step={0.5} 
+            onPointerDown={() => { saveHistory(); setIsStraightening(true); }}
+            onPointerUp={() => setIsStraightening(false)}
+            onChange={(v) => updatePageAttributes(page.id, { fineRotation: v })} 
+            unit="°" 
+          />
+          <SliderControl 
+            label="Zoom" 
+            value={page.scale} 
+            min={0.5} max={3} step={0.05} 
+            onPointerDown={saveHistory} 
+            onChange={(v) => updatePageAttributes(page.id, { scale: v })} 
+            unit="x" 
+          />
         </div>
 
-        <div className="pt-3 border-t border-slate-100">
-          <h4 className="text-[10px] font-bold text-slate-800 uppercase tracking-widest mb-3">Enhancements</h4>
-          <div className="grid grid-cols-3 gap-2 sm:gap-4">
-            <div>
-              <div className="flex justify-between text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-2">
-                <span>Bright</span><span className="text-[#6384A3]">{page.brightness}%</span>
-              </div>
-              <input type="range" min="50" max="150" value={page.brightness} onPointerDown={saveHistory} onChange={(e) => updatePageAttributes(page.id, { brightness: Number(e.target.value) })} className="w-full accent-[#6384A3]" />
-            </div>
-            <div>
-              <div className="flex justify-between text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-2">
-                <span>Contrast</span><span className="text-[#6384A3]">{page.contrast}%</span>
-              </div>
-              <input type="range" min="50" max="150" value={page.contrast} onPointerDown={saveHistory} onChange={(e) => updatePageAttributes(page.id, { contrast: Number(e.target.value) })} className="w-full accent-[#6384A3]" />
-            </div>
-            <div>
-              <div className="flex justify-between text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-2">
-                <span>Sharpen</span><span className="text-[#6384A3]">{page.sharpen}%</span>
-              </div>
-              <input type="range" min="0" max="100" value={page.sharpen} onPointerDown={saveHistory} onChange={(e) => updatePageAttributes(page.id, { sharpen: Number(e.target.value) })} className="w-full accent-[#6384A3]" />
-            </div>
+        <div className="pb-4 border-b border-slate-100">
+          <div className="flex items-center justify-between mb-4">
+            <h4 className="text-[10px] font-bold text-slate-800 uppercase tracking-widest">Color Adjustments</h4>
+          </div>
+          <div className="grid grid-cols-2 gap-x-6 gap-y-4">
+            <SliderControl label="Exposure" value={page.brightness} min={-100} max={100} onPointerDown={saveHistory} onChange={(v) => updatePageAttributes(page.id, { brightness: v })} />
+            <SliderControl label="Contrast" value={page.contrast} min={-100} max={100} onPointerDown={saveHistory} onChange={(v) => updatePageAttributes(page.id, { contrast: v })} />
+            <SliderControl label="Saturation" value={page.saturation} min={-100} max={100} onPointerDown={saveHistory} onChange={(v) => updatePageAttributes(page.id, { saturation: v })} />
+            <SliderControl label="Warmth" value={page.sepia} min={-100} max={100} onPointerDown={saveHistory} onChange={(v) => updatePageAttributes(page.id, { sepia: v })} />
+            <SliderControl label="Hue" value={page.hue} min={-180} max={180} onPointerDown={saveHistory} onChange={(v) => updatePageAttributes(page.id, { hue: v })} unit="°" />
+            <SliderControl label="Sharpen" value={page.sharpen} min={-100} max={100} onPointerDown={saveHistory} onChange={(v) => updatePageAttributes(page.id, { sharpen: v })} />
           </div>
           
-          <div className="flex flex-col gap-2 mt-4">
-            <label className="flex items-center gap-2 text-[10px] font-bold text-slate-700 uppercase tracking-widest cursor-pointer">
-              <input type="checkbox" checked={page.grayscale} onChange={(e) => { saveHistory(); updatePageAttributes(page.id, { grayscale: e.target.checked }) }} className="w-3.5 h-3.5 accent-[#6384A3] rounded" />
-              Black & White (Grayscale)
-            </label>
-          </div>
-
-          <div className="pt-4 border-t border-slate-100 mt-4 space-y-2">
-            <label className="text-[10px] font-bold text-slate-700 uppercase tracking-widest block">AI Background Removal</label>
-            <CustomDropdown 
-              value={pageBgModel} 
-              onChange={setPageBgModel} 
-              direction="up"
-              options={[
-                { value: 'briaai/RMBG-1.4', label: 'Light' },
-                { value: 'isnet_fp16', label: 'Standard ' },
-                { value: 'isnet', label: 'Max' }
-              ]} 
-            />
-            <button 
-              onClick={() => handleRemovePageBg(page.id, page.url)} 
-              disabled={isProcessing} 
-              className="w-full py-2 bg-[#6384A3]/10 text-[#6384A3] border border-[#6384A3]/20 font-bold text-[9px] uppercase tracking-widest rounded hover:bg-[#6384A3]/20 transition-colors flex items-center justify-center gap-2"
-            >
-              <Wand2 className="w-3 h-3" /> Remove Background
-            </button>
-          </div>
+          <label className="flex items-center gap-2 mt-4 text-[10px] font-bold text-slate-700 uppercase tracking-widest cursor-pointer">
+            <input type="checkbox" checked={page.grayscale} onChange={(e) => { saveHistory(); updatePageAttributes(page.id, { grayscale: e.target.checked }) }} className="w-3.5 h-3.5 accent-[#6384A3] rounded" />
+            Black & White Filter
+          </label>
         </div>
 
-        <div className="pt-4 border-t border-slate-100">
+        <div className="space-y-2">
+          <label className="text-[10px] font-bold text-slate-700 uppercase tracking-widest block">AI Background Removal</label>
+          <CustomDropdown 
+            value={pageBgModel} 
+            onChange={setPageBgModel} 
+            direction="up"
+            options={[
+              { value: 'document-advanced', label: 'Color Document Cleaner (Best)' },
+              { value: 'briaai/RMBG-1.4', label: 'Pro AI' },
+              { value: 'isnet_fp16', label: 'Standard AI' },
+              { value: 'isnet', label: 'Max Detail' }
+            ]} 
+          />
+          <button 
+            onClick={() => handleRemovePageBg(page.id, page.url)} 
+            disabled={isProcessing} 
+            className="w-full py-2 bg-[#6384A3]/10 text-[#6384A3] border border-[#6384A3]/20 font-bold text-[9px] uppercase tracking-widest rounded hover:bg-[#6384A3]/20 transition-colors flex items-center justify-center gap-2 mt-2"
+          >
+            <Wand2 className="w-3 h-3" /> Remove Background
+          </button>
+        </div>
+
+        <div className="pt-2 border-t border-slate-100">
           <button 
             onClick={() => {
               saveHistory();
-              updatePageAttributes(page.id, { url: page.originalUrl, fineRotation: 0, scale: 1, brightness: 100, contrast: 100, sharpen: 0, grayscale: false });
+              updatePageAttributes(page.id, { url: page.originalUrl, fineRotation: 0, scale: 1, brightness: 0, contrast: 0, sharpen: 0, saturation: 0, hue: 0, sepia: 0, grayscale: false });
               showToast('Page reset to original');
             }} 
             className="w-full py-2 px-4 text-xs font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50 uppercase tracking-widest transition-colors"
@@ -1237,7 +1298,8 @@ export default function PdfEditor() {
                           onChange={setSigBgModel} 
                           direction="up"
                           options={[
-                            { value: 'briaai/RMBG-1.4', label: 'Pro AI (Best)' },
+                            { value: 'document-advanced', label: 'Color Document Cleaner (Best)' },
+                            { value: 'briaai/RMBG-1.4', label: 'Pro AI' },
                             { value: 'isnet_fp16', label: 'Standard AI' },
                             { value: 'isnet', label: 'Max Detail' }
                           ]} 
@@ -1494,7 +1556,7 @@ export default function PdfEditor() {
     )
   }
 
-  // --- CORE CANVAS RENDERING ---
+  // --- CORE CANVAS RENDERING FOR EXPORT ---
   const renderPageToCanvas = async (page: PageItem, index: number, forPdf = false, skipSignature = false) => {
     const img = await createImage(page.url)
     const canvas = document.createElement('canvas')
@@ -1529,10 +1591,14 @@ export default function PdfEditor() {
     ctx.translate(canvas.width / 2, canvas.height / 2)
     ctx.rotate(((page.rotation + page.fineRotation) * Math.PI) / 180)
     
-    // Apply local page filters (Brightness, Contrast, Grayscale)
-    const b = page.brightness ?? 100
-    const c = page.contrast ?? 100
-    ctx.filter = `brightness(${b}%) contrast(${c}%) ${page.grayscale ? 'grayscale(100%)' : ''}`
+    const b = 100 + (page.brightness ?? 0)
+    const c = 100 + (page.contrast ?? 0)
+    const sat = 100 + (page.saturation ?? 0)
+    const hue = page.hue ?? 0
+    const sep = Math.max(0, page.sepia ?? 0)
+    const gray = page.grayscale ? 100 : 0
+    
+    ctx.filter = `brightness(${b}%) contrast(${c}%) saturate(${sat}%) hue-rotate(${hue}deg) grayscale(${gray}%) sepia(${sep}%)`;
 
     const scaleX = scaleRatio * (page.scale || 1)
     const scaleY = scaleRatio * (page.scale || 1)
@@ -1564,15 +1630,13 @@ export default function PdfEditor() {
       const data = imgData.data
       for (let j = 0; j < data.length; j += 4) {
         const luma = data[j] * 0.299 + data[j+1] * 0.587 + data[j+2] * 0.114
-        data[j] = luma
-        data[j+1] = luma
-        data[j+2] = luma
+        data[j] = luma; data[j+1] = luma; data[j+2] = luma
       }
       ctx.putImageData(imgData, 0, 0)
     }
 
     // Manual JS Sharpening for Output Context
-    if (page.sharpen > 0) {
+    if ((page.sharpen ?? 0) > 0) {
       const amount = page.sharpen / 100;
       const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
       const data = imgData.data;
@@ -1643,29 +1707,17 @@ export default function PdfEditor() {
       const fontSize = Math.max(Math.floor(canvas.width / 15), 20)
       ctx.font = `bold ${fontSize}px sans-serif`
       ctx.fillStyle = `rgba(150, 150, 150, ${watermarkOpacity / 100})`
-      let x = canvas.width / 2
-      let y = canvas.height / 2
-      let align: CanvasTextAlign = 'center'
-      let baseline: CanvasTextBaseline = 'middle'
-      let angle = -Math.PI / 4
+      let x = canvas.width / 2; let y = canvas.height / 2;
+      let align: CanvasTextAlign = 'center'; let baseline: CanvasTextBaseline = 'middle'; let angle = -Math.PI / 4;
       const padding = fontSize
 
-      if (watermarkPlacement === 'top-left') {
-        x = padding; y = padding; align = 'left'; baseline = 'top'; angle = 0;
-      } else if (watermarkPlacement === 'top-right') {
-        x = canvas.width - padding; y = padding; align = 'right'; baseline = 'top'; angle = 0;
-      } else if (watermarkPlacement === 'bottom-left') {
-        x = padding; y = canvas.height - padding; align = 'left'; baseline = 'bottom'; angle = 0;
-      } else if (watermarkPlacement === 'bottom-right') {
-        x = canvas.width - padding; y = canvas.height - padding; align = 'right'; baseline = 'bottom'; angle = 0;
-      }
+      if (watermarkPlacement === 'top-left') { x = padding; y = padding; align = 'left'; baseline = 'top'; angle = 0; }
+      else if (watermarkPlacement === 'top-right') { x = canvas.width - padding; y = padding; align = 'right'; baseline = 'top'; angle = 0; }
+      else if (watermarkPlacement === 'bottom-left') { x = padding; y = canvas.height - padding; align = 'left'; baseline = 'bottom'; angle = 0; }
+      else if (watermarkPlacement === 'bottom-right') { x = canvas.width - padding; y = canvas.height - padding; align = 'right'; baseline = 'bottom'; angle = 0; }
 
-      ctx.translate(x, y)
-      ctx.rotate(angle)
-      ctx.textAlign = align
-      ctx.textBaseline = baseline
-      ctx.fillText(watermarkText, 0, 0)
-      ctx.setTransform(1, 0, 0, 1, 0, 0)
+      ctx.translate(x, y); ctx.rotate(angle); ctx.textAlign = align; ctx.textBaseline = baseline;
+      ctx.fillText(watermarkText, 0, 0); ctx.setTransform(1, 0, 0, 1, 0, 0);
     }
 
     return canvas;
@@ -1860,13 +1912,67 @@ export default function PdfEditor() {
     }
   }
 
+  const renderPreviewCanvas = (page: PageItem, isFull: boolean) => {
+    const is90 = page.rotation % 180 !== 0;
+    const vhBase = isFull ? (activePanel === 'page-edit' ? 80 : 75) : 60;
+    const vwBase = isFull ? 80 : 50;
+    const zoom = isFull ? sigZoom : 1;
+
+    return (
+      <div className="m-auto flex items-center justify-center min-w-max min-h-max relative p-4">
+
+        {/* The Rotatable Container that mimics the paper bounds */}
+        <div 
+          ref={isFull ? modalSigRef : rightSideSigRef}
+          className="relative touch-none inline-flex items-center justify-center"
+          onPointerDown={() => setOpenMenuSigId(null)}
+          onPointerMove={handlePointerMoveSig}
+          onPointerUp={handlePointerUpSig}
+          onPointerLeave={handlePointerUpSig}
+          style={{
+            maxHeight: is90 ? '90vw' : `${vhBase * zoom}vh`,
+            maxWidth: is90 ? `${vhBase * zoom}vh` : '90vw',
+            transform: `rotate(${page.rotation}deg) scale(${activePanel === 'page-edit' ? page.scale || 1 : 1})`,
+            transition: 'transform 0.15s ease-out'
+          }}
+        >
+          {/* The Image inside the bounds */}
+          <img 
+            src={page.url} 
+            className="block pointer-events-none w-auto h-auto bg-white shadow-xl" 
+            style={{ 
+              maxHeight: is90 ? '90vw' : `${vhBase * zoom}vh`,
+              maxWidth: is90 ? `${vhBase * zoom}vh` : '90vw',
+              transform: `rotate(${page.fineRotation || 0}deg)`,
+              filter: getFilterString(page)
+            }}
+            alt="Preview" 
+            draggable={false}
+          />
+          
+          {/* Straightener Axis Lines (Rotates with outer box naturally) */}
+          {activePanel === 'page-edit' && isStraightening && (
+             <div className="absolute inset-0 pointer-events-none border border-amber-600 z-20 flex items-center justify-center mix-blend-difference overflow-visible">
+               <div className="w-[150%] h-[1.5px] bg-amber-500 absolute top-1/2 -translate-y-1/2 opacity-75" />
+               <div className="h-[150%] w-[1.5px] bg-amber-500 absolute left-1/2 -translate-x-1/2 opacity-75" />
+             </div>
+          )}
+          
+          <div className="absolute inset-0 pointer-events-none">
+            {renderSignatureOverlay(isFull ? 'modal' : 'right')}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <>
       {/* SVG Filters (Global defs for CSS Sharpening) */}
       <svg style={{ display: 'none' }}>
         <defs>
           {pages.map(p => {
-            if (p.sharpen > 0) {
+            if ((p.sharpen ?? 0) > 0) {
               const amount = p.sharpen / 100;
               const center = 1 + 4 * amount;
               const edge = -amount;
@@ -1916,173 +2022,121 @@ export default function PdfEditor() {
         </div>
 
         {/* Main Grid / Preview Area */}
-        <div className="flex-1 p-4 lg:p-8 bg-white flex flex-col relative min-h-[400px] lg:h-full order-1 lg:order-2">
-          <div className="flex justify-between items-center mb-4 lg:mb-6 border-b border-slate-100 pb-2 flex-shrink-0">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">
-              {pages.length} {pages.length === 1 ? 'Page' : 'Pages'} Loaded
-            </span>
-            {pages.length > 0 && !isProcessing && (
-              <button onClick={clearAll} className="text-[10px] font-bold text-red-500 hover:text-red-700 uppercase tracking-widest transition-colors flex items-center gap-1">
-                <Trash2 className="w-3 h-3" /> Clear All
-              </button>
-            )}
-          </div>
-
+        <div className="flex-1 overflow-hidden relative touch-none w-full h-full flex items-center justify-center bg-slate-100 order-1 lg:order-2">
           {pages.length === 0 ? (
-            <div {...getRootProps()} className={`flex-1 flex flex-col items-center justify-center border-2 border-dashed rounded-xl cursor-pointer transition-colors p-6 text-center ${isDragActive ? 'border-[#6384A3] bg-blue-50/50' : 'border-slate-200 hover:border-[#6384A3] hover:bg-slate-50'}`}>
-              <input {...getInputProps()} />
-              <FileText className="w-10 h-10 lg:w-12 lg:h-12 mb-4 text-slate-300" />
-              <h3 className="text-sm font-bold text-slate-700">Drag & drop PDFs or Images here</h3>
-              <p className="text-xs text-slate-500 mt-1">Pro Tip: Drop multiple files to merge them</p>
+            <div className="p-4 lg:p-8 w-full h-full flex flex-col">
+              <div {...getRootProps()} className={`flex-1 flex flex-col items-center justify-center border-2 border-dashed rounded-xl cursor-pointer transition-colors p-6 text-center ${isDragActive ? 'border-[#6384A3] bg-blue-50/50' : 'border-slate-300 hover:border-[#6384A3] hover:bg-white bg-slate-50'}`}>
+                <input {...getInputProps()} />
+                <FileText className="w-10 h-10 lg:w-12 lg:h-12 mb-4 text-slate-400" />
+                <h3 className="text-sm font-bold text-slate-700">Drag & drop PDFs or Images here</h3>
+                <p className="text-xs text-slate-500 mt-1">Pro Tip: Drop multiple files to merge them</p>
+              </div>
             </div>
           ) : (
-            // Live Preview & DND Grid Shared Area
-            <div className="flex-1 flex flex-col bg-slate-100 rounded-xl border border-slate-200 relative select-none animate-in fade-in h-full min-h-[400px] overflow-hidden">
-              
-              {/* Top Action Badges (Z-50) */}
-              {!showViewerGrid && signatures && signatures.length > 0 && (
-                 <div className="absolute top-3 left-3 z-50 bg-white/90 px-3 py-1.5 rounded shadow-sm text-[10px] font-bold text-slate-600 uppercase tracking-widest flex items-center gap-2 border border-slate-200 pointer-events-none">
-                   <Move className="w-3.5 h-3.5" /> Drag Signature
-                 </div>
+            <>
+              {/* Static overlay tools for single page view */}
+              {!showViewerGrid && sigPageTarget && (
+                <div className="absolute top-6 left-6 z-50 flex gap-3 pointer-events-auto">
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); rotatePage(sigPageTarget.id) }} 
+                    className="bg-slate-800 text-white p-3 rounded-full shadow-lg hover:bg-black transition-transform hover:scale-105"
+                    title="Rotate 90°"
+                  >
+                    <RotateCw className="w-5 h-5"/>
+                  </button>
+                  <button 
+                    onClick={(e) => { 
+                      e.stopPropagation(); 
+                      removePage(sigPageTarget.id);
+                      if (pages.length <= 1) setShowViewerGrid(true); 
+                    }} 
+                    className="bg-red-500 text-white p-3 rounded-full shadow-lg hover:bg-red-600 transition-transform hover:scale-105"
+                    title="Delete Page"
+                  >
+                    <Trash2 className="w-5 h-5"/>
+                  </button>
+                </div>
               )}
 
-              <div className="absolute top-3 right-3 z-50 pointer-events-auto flex items-center gap-2">
-                <button
-                  onClick={enterFullscreen}
-                  className="bg-white/90 hover:bg-white text-slate-700 px-3 py-1.5 rounded shadow-sm text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 border border-slate-200 transition-colors"
-                  title="Open Full Screen"
-                >
-                  <Move className="w-3.5 h-3.5" /> Full Screen
-                </button>
-              </div>
-
-              {renderPaginationOverlay()}
-
-              {/* Viewer Container */}
-              <div className="flex-1 overflow-hidden relative touch-none px-4 pt-16 pb-20 w-full h-full flex items-center justify-center">
-                {showViewerGrid ? (
-                  // DND Layout Grid
-                  <div className="absolute inset-0 z-40 bg-slate-100 overflow-y-auto px-4 pt-16 pb-24 custom-scrollbar">
-                    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-                      <SortableContext items={pages.map(p => p.id)} strategy={rectSortingStrategy}>
-                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 lg:gap-6 pb-6">
-                          {pages.map((page, index) => (
-                            <SortablePageItem 
-                              key={page.id} 
-                              id={page.id} 
-                              url={page.url} 
-                              index={index}
-                              rotation={page.rotation}
-                              fineRotation={page.fineRotation || 0}
-                              scale={page.scale || 1}
-                              brightness={page.brightness}
-                              contrast={page.contrast}
-                              sharpen={page.sharpen || 0}
-                              grayscale={page.grayscale}
-                              onRemove={removePage} 
-                              onRotate={rotatePage}
-                              onEdit={handleEditPage}
-                              onView={(id) => {
-                                const idx = pages.findIndex(p => p.id === id);
-                                if(idx !== -1) {
-                                  setPreviewPageIndex(idx);
-                                  setShowViewerGrid(false);
-                                }
-                              }}
-                            />
-                          ))}
-                          
-                          {/* Add More Dropzone Inline */}
-                          <div {...getRootProps()} className={`aspect-[3/4] border-2 border-dashed rounded-lg flex flex-col items-center justify-center cursor-pointer transition-colors p-2 text-center ${isDragActive ? 'border-[#6384A3] bg-blue-50' : 'border-slate-200 hover:border-[#6384A3] hover:bg-slate-50'}`}>
-                            <input {...getInputProps()} />
-                            <span className="text-2xl text-slate-400 font-light mb-1">+</span>
-                            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Merge File</span>
-                          </div>
-                        </div>
-                      </SortableContext>
-                    </DndContext>
-                  </div>
-                ) : (
-                  // Single Page Fast Preview
-                  <div
-                    ref={rightSideSigRef}
-                    className="relative shadow-none bg-slate-50 touch-none inline-flex max-w-full max-h-full group"
-                    onPointerDown={() => setOpenMenuSigId(null)}
-                    onPointerMove={handlePointerMoveSig}
-                    onPointerUp={handlePointerUpSig}
-                    onPointerLeave={handlePointerUpSig}
+              {!showViewerGrid && (
+                <div className="absolute top-6 right-6 z-50 pointer-events-auto">
+                  <button
+                    onClick={enterFullscreen}
+                    className="bg-white hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-lg shadow-lg text-[11px] font-bold uppercase tracking-widest flex items-center gap-2 border border-slate-200 transition-transform hover:scale-105"
+                    title="Open Full Screen"
                   >
-                    {/* Integrated Tools in Single Page Preview */}
-                    {sigPageTarget && (
-                      <div className="absolute top-4 left-4 z-50 flex flex-col gap-2 pointer-events-auto opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
-                        <button 
-                          onClick={(e) => { e.stopPropagation(); rotatePage(sigPageTarget.id) }} 
-                          className="bg-slate-800/90 text-white p-2 rounded-full shadow hover:bg-black transition-colors"
-                          title="Rotate 90°"
-                        >
-                          <RotateCw className="w-4 h-4"/>
-                        </button>
-                        <button 
-                          onClick={(e) => { e.stopPropagation(); handleEditPage(sigPageTarget.id); }} 
-                          className="bg-[#6384A3]/90 text-white p-2 rounded-full shadow hover:bg-[#4f6a83] transition-colors"
-                          title="Page Settings"
-                        >
-                          <Edit3 className="w-4 h-4"/>
-                        </button>
-                        <button 
-                          onClick={(e) => { 
-                            e.stopPropagation(); 
-                            removePage(sigPageTarget.id);
-                            if (pages.length <= 1) setShowViewerGrid(true); 
-                          }} 
-                          className="bg-red-500/90 text-white p-2 rounded-full shadow hover:bg-red-600 transition-colors"
-                          title="Delete Page"
-                        >
-                          <Trash2 className="w-4 h-4"/>
-                        </button>
-                      </div>
-                    )}
+                    <Move className="w-4 h-4" /> Full Screen
+                  </button>
+                </div>
+              )}
 
-                    {/* Fast Direct CSS Render for Smoothness */}
-                    {sigPageTarget && (
-                      <>
-                        <img 
-                          src={sigPageTarget.url} 
-                          className="block pointer-events-none bg-white transition-transform duration-75 shadow-sm" 
-                          style={{ 
-                            maxWidth: '100%', 
-                            maxHeight: '100%', 
-                            width: 'auto', 
-                            height: 'auto', 
-                            objectFit: 'contain',
-                            transform: `rotate(${sigPageTarget.rotation + (sigPageTarget.fineRotation || 0)}deg) scale(${activePanel === 'page-edit' ? sigPageTarget.scale || 1 : 1})`,
-                            filter: `${sigPageTarget.sharpen > 0 ? `url(#sharpen-${sigPageTarget.id}) ` : ''}brightness(${sigPageTarget.brightness ?? 100}%) contrast(${sigPageTarget.contrast ?? 100}%) ${sigPageTarget.grayscale ? 'grayscale(100%)' : ''}`.trim()
-                          }}
-                          alt="Preview" 
-                          draggable={false}
-                        />
-                        
-                        <div className="absolute inset-0 pointer-events-none">
-                          {renderSignatureOverlay('right')}
-                        </div>
-                      </>
-                    )}
+              {showViewerGrid ? (
+                <div className="absolute inset-0 z-40 bg-slate-100 overflow-y-auto px-6 py-20 custom-scrollbar">
+                  <div className="flex justify-between items-center mb-6 border-b border-slate-200 pb-2">
+                    <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">
+                      {pages.length} {pages.length === 1 ? 'Page' : 'Pages'} Loaded
+                    </span>
+                    <button onClick={clearAll} className="text-[10px] font-bold text-red-500 hover:text-red-700 uppercase tracking-widest transition-colors flex items-center gap-1">
+                      <Trash2 className="w-3 h-3" /> Clear All
+                    </button>
                   </div>
-                )}
-              </div>
-            </div>
+                  <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                    <SortableContext items={pages.map(p => p.id)} strategy={rectSortingStrategy}>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 lg:gap-6 pb-6">
+                        {pages.map((page, index) => (
+                          <SortablePageItem 
+                            key={page.id} 
+                            id={page.id} 
+                            url={page.url} 
+                            index={index}
+                            rotation={page.rotation}
+                            fineRotation={page.fineRotation || 0}
+                            scale={page.scale || 1}
+                            brightness={page.brightness}
+                            contrast={page.contrast}
+                            saturation={page.saturation}
+                            hue={page.hue}
+                            sepia={page.sepia}
+                            sharpen={page.sharpen || 0}
+                            grayscale={page.grayscale}
+                            onRemove={removePage} 
+                            onRotate={rotatePage}
+                            onEdit={handleEditPage}
+                            onView={(id) => {
+                              const idx = pages.findIndex(p => p.id === id);
+                              if(idx !== -1) {
+                                setPreviewPageIndex(idx);
+                                setShowViewerGrid(false);
+                              }
+                            }}
+                          />
+                        ))}
+                        
+                        <div {...getRootProps()} className={`aspect-[3/4] border-2 border-dashed rounded-lg flex flex-col items-center justify-center cursor-pointer transition-colors p-2 text-center ${isDragActive ? 'border-[#6384A3] bg-blue-50' : 'border-slate-300 hover:border-[#6384A3] hover:bg-white bg-slate-50'}`}>
+                          <input {...getInputProps()} />
+                          <span className="text-2xl text-slate-400 font-light mb-1">+</span>
+                          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Merge File</span>
+                        </div>
+                      </div>
+                    </SortableContext>
+                  </DndContext>
+                </div>
+              ) : (
+                sigPageTarget && renderPreviewCanvas(sigPageTarget, false)
+              )}
+              {renderPaginationOverlay()}
+            </>
           )}
         </div>
       </div>
 
       {/* Fullscreen Editor / Universal Workspace Mode */}
       {isFullscreen && pages.length > 0 && sigPageTarget && (
-        <div className="fixed inset-0 z-[160] bg-slate-900/95 flex flex-col md:flex-row animate-in fade-in duration-200">
+        <div className="fixed inset-0 z-[160] bg-slate-100 flex flex-col md:flex-row animate-in fade-in duration-200">
           
-          {/* Top Right Close Button (Red Highlighted) */}
           <button 
             onClick={() => setIsFullscreen(false)} 
-            className="fixed top-4 right-4 z-[200] bg-red-500 text-white p-2.5 rounded-full shadow-2xl hover:bg-red-600 hover:scale-105 transition-all border-2 border-white/20 flex items-center justify-center group"
+            className="fixed top-6 right-6 z-[300] bg-red-600 text-white p-3 rounded-full shadow-2xl hover:bg-red-500 hover:scale-105 ring-4 ring-red-500/30 transition-all border border-white/20 flex items-center justify-center group"
             title="Close Full Screen"
           >
             <X className="w-5 h-5 group-hover:rotate-90 transition-transform" />
@@ -2110,11 +2164,32 @@ export default function PdfEditor() {
             </div>
           </div>
           
-          {/* Draggable Viewport in Modal */}
           <div className="flex-1 relative touch-none select-none bg-slate-100 overflow-hidden flex flex-col">
-              
-             {/* Zoom Controls Overlay */}
-             <div className="absolute top-4 right-20 z-50 flex gap-1 bg-slate-800/90 p-1.5 rounded-lg backdrop-blur border border-slate-700 shadow-xl">
+             
+             {!showViewerGrid && (
+               <div className="absolute top-6 left-6 z-50 flex gap-3 pointer-events-auto">
+                 <button 
+                   onClick={(e) => { e.stopPropagation(); rotatePage(sigPageTarget.id) }} 
+                   className="bg-slate-800 text-white p-3 rounded-full shadow-lg hover:bg-black transition-transform hover:scale-105"
+                   title="Rotate 90°"
+                 >
+                   <RotateCw className="w-5 h-5"/>
+                 </button>
+                 <button 
+                   onClick={(e) => { 
+                     e.stopPropagation(); 
+                     removePage(sigPageTarget.id);
+                     if (pages.length <= 1) setShowViewerGrid(true); 
+                   }} 
+                   className="bg-red-500 text-white p-3 rounded-full shadow-lg hover:bg-red-600 transition-transform hover:scale-105"
+                   title="Delete Page"
+                 >
+                   <Trash2 className="w-5 h-5"/>
+                 </button>
+               </div>
+             )}
+
+             <div className="absolute top-4 right-24 z-50 flex gap-1 bg-slate-800/90 p-1.5 rounded-lg backdrop-blur border border-slate-700 shadow-xl">
                <button onClick={() => setSigZoom(z => Math.max(0.25, z - 0.25))} className="p-2 bg-slate-700 text-white rounded hover:bg-slate-600 transition-colors"><ZoomOut className="w-4 h-4"/></button>
                <div className="flex items-center justify-center px-3 min-w-[4rem] text-xs font-bold text-slate-300 tracking-widest">{Math.round(sigZoom * 100)}%</div>
                <button onClick={() => setSigZoom(z => Math.min(4, z + 0.25))} className="p-2 bg-slate-700 text-white rounded hover:bg-slate-600 transition-colors"><ZoomIn className="w-4 h-4"/></button>
@@ -2122,76 +2197,23 @@ export default function PdfEditor() {
 
              {renderPaginationOverlay()}
 
-             {/* Modal PDF Viewer Container */}
-             <div className="flex-1 overflow-auto relative w-full h-full z-10 px-4 pt-20 pb-24 md:px-8 md:pt-20 md:pb-24 flex custom-scrollbar">
+             <div className="flex-1 overflow-auto relative w-full h-full z-10 flex items-center justify-center bg-slate-100">
                {showViewerGrid ? (
-                 <div className="absolute inset-0 z-40 bg-slate-900/95 overflow-y-auto px-4 pt-20 pb-24 md:px-8 md:pt-20 md:pb-24 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 animate-in fade-in">
-                   {pages.map((p, idx) => (
-                     <div key={p.id} onClick={() => { setPreviewPageIndex(idx); setShowViewerGrid(false); }} className={`cursor-pointer border-2 rounded-lg overflow-hidden aspect-[3/4] relative transition-colors bg-white shadow-xl ${previewPageIndex === idx ? 'border-blue-400 ring-2 ring-blue-400' : 'border-transparent hover:border-slate-500'}`}>
-                       <img src={p.url} alt={`Thumb ${idx+1}`} className="w-full h-full object-contain bg-slate-800" style={{ transform: `rotate(${p.rotation + p.fineRotation}deg)` }} />
-                       <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded">Page {idx + 1}</div>
-                       {signatures && signatures.length > 0 && signatures.some(sig => shouldApplySignature(idx, sig.applyMode, sig.customPages)) && (
-                         <div className="absolute top-1 right-1 bg-blue-500 text-white text-[9px] px-1.5 py-0.5 rounded shadow">Signed</div>
-                       )}
-                     </div>
-                   ))}
-                 </div>
-               ) : (
-                 <div className="m-auto flex items-center justify-center min-w-max min-h-max transition-all">
-                   <div 
-                     ref={modalSigRef}
-                     className="relative shadow-2xl bg-white touch-none inline-block group"
-                     onPointerDown={() => setOpenMenuSigId(null)}
-                     onPointerMove={handlePointerMoveSig}
-                     onPointerUp={handlePointerUpSig}
-                     onPointerLeave={handlePointerUpSig}
-                   >
-                     {/* Tools Overlay in Modal Preview */}
-                     <div className="absolute top-4 left-4 z-50 flex flex-col gap-2 pointer-events-auto opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
-                        <button 
-                          onClick={(e) => { e.stopPropagation(); rotatePage(sigPageTarget.id) }} 
-                          className="bg-slate-800/90 text-white p-2 rounded-full shadow hover:bg-black transition-colors"
-                          title="Rotate 90°"
-                        >
-                          <RotateCw className="w-4 h-4"/>
-                        </button>
-                        <button 
-                          onClick={(e) => { e.stopPropagation(); setActivePanel('page-edit') }} 
-                          className="bg-[#6384A3]/90 text-white p-2 rounded-full shadow hover:bg-[#4f6a83] transition-colors"
-                          title="Page Settings"
-                        >
-                          <Edit3 className="w-4 h-4"/>
-                        </button>
-                      </div>
-
-                     {/* Fast Direct CSS Render for Smoothness */}
-                     <img 
-                       src={sigPageTarget.url} 
-                       className="block pointer-events-none bg-white transition-transform duration-75" 
-                       style={{ 
-                         height: activePanel === 'page-edit' ? '80vh' : `${75 * sigZoom}vh`, 
-                         width: 'auto', 
-                         maxWidth: 'none',
-                         transform: `rotate(${sigPageTarget.rotation + (sigPageTarget.fineRotation || 0)}deg) scale(${activePanel === 'page-edit' ? sigPageTarget.scale || 1 : 1})`,
-                         filter: `${sigPageTarget.sharpen > 0 ? `url(#sharpen-${sigPageTarget.id}) ` : ''}brightness(${sigPageTarget.brightness ?? 100}%) contrast(${sigPageTarget.contrast ?? 100}%) ${sigPageTarget.grayscale ? 'grayscale(100%)' : ''}`.trim()
-                       }}
-                       alt="Preview" 
-                       draggable={false}
-                     />
-
-                     {/* Straightener Axis Lines (Visible when editing page attributes) */}
-                     {activePanel === 'page-edit' && (
-                        <div className="absolute inset-0 pointer-events-none border border-blue-500 z-20 flex items-center justify-center mix-blend-difference">
-                          <div className="w-full h-px bg-blue-400 absolute top-1/2 -translate-y-1/2" />
-                          <div className="h-full w-px bg-blue-400 absolute left-1/2 -translate-x-1/2" />
-                        </div>
-                     )}
-                     
-                     <div className="absolute inset-0 pointer-events-none">
-                       {renderSignatureOverlay('modal')}
-                     </div>
+                 <div className="absolute inset-0 z-40 bg-slate-100 overflow-y-auto px-6 py-20 custom-scrollbar">
+                   <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 animate-in fade-in">
+                     {pages.map((p, idx) => (
+                       <div key={p.id} onClick={() => { setPreviewPageIndex(idx); setShowViewerGrid(false); }} className={`cursor-pointer border-2 rounded-lg overflow-hidden aspect-[3/4] relative transition-colors bg-slate-100 shadow-xl ${previewPageIndex === idx ? 'border-[#6384A3] ring-2 ring-[#6384A3]/50' : 'border-slate-300 hover:border-slate-400'}`}>
+                         <img src={p.url} alt={`Thumb ${idx+1}`} className="w-full h-full object-contain bg-white" style={{ transform: `rotate(${p.rotation + p.fineRotation}deg)` }} />
+                         <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded">Page {idx + 1}</div>
+                         {signatures && signatures.length > 0 && signatures.some(sig => shouldApplySignature(idx, sig.applyMode, sig.customPages)) && (
+                           <div className="absolute top-1 right-1 bg-[#6384A3] text-white text-[9px] px-1.5 py-0.5 rounded shadow">Signed</div>
+                         )}
+                       </div>
+                     ))}
                    </div>
                  </div>
+               ) : (
+                 renderPreviewCanvas(sigPageTarget, true)
                )}
              </div>
           </div>
