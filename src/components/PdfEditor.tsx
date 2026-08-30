@@ -1778,6 +1778,62 @@ export default function PdfEditor() {
     return pdf ? pdf.output('blob') : null
   }
 
+  // --- NEW: MISSING EXPORT FUNCTIONS ADDED HERE ---
+  const exportAsPdf = async () => {
+    setIsProcessing(true)
+    setLoadingText('Generating PDF...')
+    await new Promise(r => setTimeout(r, 50))
+    try {
+      const blob = await generatePdfBlob()
+      if (blob) {
+        const url = URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = url
+        link.download = `${originalDocName}_zs_converter.pdf`
+        link.click()
+        URL.revokeObjectURL(url)
+        showToast('PDF exported successfully')
+      }
+    } catch (e) {
+      alert("PDF export failed.")
+    } finally {
+      setIsProcessing(false)
+      setLoadingText('')
+    }
+  }
+
+  const exportAsImages = async () => {
+    setIsProcessing(true)
+    setLoadingText('Generating Image Archive...')
+    await new Promise(r => setTimeout(r, 50))
+    try {
+      const zip = new JSZip()
+      for (let i = 0; i < pages.length; i++) {
+        const canvas = await renderPageToCanvas(pages[i], i, false)
+        if (!canvas) continue
+
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.92)
+        // Extract base64 part
+        const base64Data = dataUrl.split(',')[1]
+        zip.file(`${originalDocName}_page_${i + 1}.jpg`, base64Data, { base64: true })
+      }
+
+      const zipContent = await zip.generateAsync({ type: 'blob' })
+      const url = URL.createObjectURL(zipContent)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `${originalDocName}_images_zs_converter.zip`
+      link.click()
+      URL.revokeObjectURL(url)
+      showToast('Image archive exported')
+    } catch (e) {
+      alert("Image export failed.")
+    } finally {
+      setIsProcessing(false)
+      setLoadingText('')
+    }
+  }
+
   const exportAsWord = async () => {
     setIsProcessing(true)
     setLoadingText('Building Word Document...')
@@ -2159,7 +2215,7 @@ export default function PdfEditor() {
           </div>
           
           <div className="flex-1 relative touch-none select-none bg-slate-100 overflow-hidden flex flex-col">
-             
+              
              {!showViewerGrid && fullScreenMode !== 'preview' && (
                <div className="absolute top-6 left-6 z-50 flex gap-3 pointer-events-auto">
                  <button 
