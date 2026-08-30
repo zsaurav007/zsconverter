@@ -47,6 +47,8 @@ const formatBytes = (bytes: number) => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
 }
 
+type ToolType = 'crop' | 'bg' | 'enhance' | 'transform' | 'resize' | 'export' | null
+
 interface PhotoEditorProps {
   file: File
   onCancel: () => void
@@ -59,8 +61,7 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
   const currentImage = history[history.length - 1] 
   const canUndo = history.length > 1
   
-  const [activeTool, setActiveTool] = useState<'crop' | 'bg' | 'enhance' | 'transform' | 'resize' | 'export' | null>('export')
-  
+  const [activeTool, setActiveTool] = useState<ToolType>('export')
   const baseName = file.name.substring(0, file.name.lastIndexOf('.')) || file.name
 
   const [imgDims, setImgDims] = useState({ w: 0, h: 0 })
@@ -70,12 +71,75 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
     img.src = currentImage
   }, [currentImage])
 
+  const previewContainerRef = useRef<HTMLDivElement>(null)
+  const [baseRenderDims, setBaseRenderDims] = useState({ w: 0, h: 0 })
+
+  // Dynamically calculate the perfect 1:1 screen fit size on load
+  useEffect(() => {
+    if (imgDims.w === 0 || activeTool !== 'crop') return
+    
+    const updateDims = () => {
+      if (!previewContainerRef.current) return
+      const { clientWidth, clientHeight } = previewContainerRef.current
+      const availW = clientWidth - 32 
+      const availH = clientHeight - 32 
+      
+      const imgAspect = imgDims.w / imgDims.h
+      const containerAspect = availW / availH
+      
+      if (imgAspect > containerAspect) {
+        setBaseRenderDims({ w: availW, h: availW / imgAspect })
+      } else {
+        setBaseRenderDims({ w: availH * imgAspect, h: availH })
+      }
+    }
+
+    updateDims()
+    window.addEventListener('resize', updateDims)
+    const timeoutId = setTimeout(updateDims, 50)
+    
+    return () => {
+      window.removeEventListener('resize', updateDims)
+      clearTimeout(timeoutId)
+    }
+  }, [imgDims, activeTool, currentImage])
+
   const [liveTransform, setLiveTransform] = useState({ rotate: 0, flipH: false, flipV: false, radius: 0 })
 
   const [cropAspect, setCropAspect] = useState<number | undefined>(undefined)
+  const [cropPreset, setCropPreset] = useState<string>('free')
+  const [imageZoom, setImageZoom] = useState<number>(1)
   const [crop, setCrop] = useState<Crop>({ unit: '%', width: 50, height: 50, x: 25, y: 25 })
   const [completedCrop, setCompletedCrop] = useState<Crop | null>(null)
   const imgRef = useRef<HTMLImageElement>(null)
+
+  // Auto-convert standard % crop into strict pixel crop once dims load so the frame stays rigid
+  useEffect(() => {
+    if (baseRenderDims.w > 0 && crop.unit === '%') {
+      const initialW = baseRenderDims.w * 0.5;
+      const initialH = baseRenderDims.h * 0.5;
+      const calcCrop: Crop = {
+        unit: 'px',
+        width: initialW,
+        height: initialH,
+        x: (baseRenderDims.w - initialW) / 2,
+        y: (baseRenderDims.h - initialH) / 2
+      }
+      setCrop(calcCrop)
+      setCompletedCrop(calcCrop)
+    }
+  }, [baseRenderDims])
+
+  // Smart tracking to keep crop box centered exactly in the scroll container when image resizes
+  useEffect(() => {
+    if (previewContainerRef.current && activeTool === 'crop' && crop.unit === 'px') {
+      const container = previewContainerRef.current;
+      const padding = 16;
+      const scrollX = crop.x + padding + crop.width / 2 - container.clientWidth / 2;
+      const scrollY = crop.y + padding + crop.height / 2 - container.clientHeight / 2;
+      container.scrollTo({ left: Math.max(0, scrollX), top: Math.max(0, scrollY) });
+    }
+  }, [imageZoom]) 
 
   const [isRemovingBg, setIsRemovingBg] = useState(false)
   const [selectedModel, setSelectedModel] = useState('briaai/RMBG-1.4')
@@ -95,7 +159,6 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
   const [maintainRatio, setMaintainRatio] = useState(true)
   const [presetSize, setPresetSize] = useState('custom')
 
-  // Set exportFormat exactly to original format by default if valid
   const validFormats = ['image/png', 'image/webp', 'image/jpeg', 'image/x-icon', 'application/pdf']
   const [exportFormat, setExportFormat] = useState<string>(validFormats.includes(file.type) ? file.type : 'image/png')
   const [compressionQuality, setCompressionQuality] = useState<number>(85)
@@ -106,107 +169,23 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
   const pushToGlobalHistory = (newImageUrl: string) => setHistory(prev => [...prev, newImageUrl])
   const handleUndo = () => { if (canUndo) setHistory(prev => prev.slice(0, -1)) }
 
-  // High-Resolution Custom Architecture Background Removal
-  const handleRemoveBg = async () => {
-    setIsRemovingBg(true)
-    try {
-      const optimizedDataUrl = await optimizeImageForAI(currentImage)
-      let removedSuccessfully = false;
+  const handleApplyEnhancements = async (switchTool: boolean = true) => {
+    const img = await createImage(currentImage)
+    const canvas = document.createElement('canvas')
+    canvas.width = img.width
+    canvas.height = img.height
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
 
-      // Force Manual Architecture Loading for RMBG-1.4
-      if (selectedModel === 'briaai/RMBG-1.4') {
-        try {
-          const { AutoModel, AutoProcessor, RawImage, env } = await import('@huggingface/transformers');
-          
-          env.allowLocalModels = false; 
-          
-          // Bypasses the unsupported pipeline crash by loading the weights via custom config
-          const model = await AutoModel.from_pretrained(selectedModel, {
-            config: { model_type: 'custom' } as any,
-          });
-
-          // Inject the exact tensor math parameters RMBG-1.4 needs
-          const processor = await AutoProcessor.from_pretrained(selectedModel, {
-            config: {
-              do_normalize: true,
-              do_pad: false,
-              do_rescale: true,
-              do_resize: true,
-              image_mean: [0.5, 0.5, 0.5],
-              feature_extractor_type: "ImageFeatureExtractor",
-              image_std: [1, 1, 1],
-              resample: 2,
-              rescale_factor: 0.00392156862745098,
-              size: { width: 1024, height: 1024 }
-            } as any
-          });
-
-          const imageToProcess = await RawImage.fromURL(optimizedDataUrl);
-          const { pixel_values } = await processor(imageToProcess);
-          
-          // Generate AI Alpha Matte
-          const outputs = await model({ input: pixel_values });
-          const outTensor = Object.values(outputs)[0] as any;
-          
-          if (!outTensor || !outTensor.data) throw new Error("Invalid tensor output");
-
-          const maskWidth = outTensor.dims[3];
-          const maskHeight = outTensor.dims[2];
-
-          const maskCanvas = document.createElement('canvas');
-          maskCanvas.width = maskWidth;
-          maskCanvas.height = maskHeight;
-          const maskCtx = maskCanvas.getContext('2d');
-          if (!maskCtx) throw new Error("Mask Context failed");
-
-          const imgData = maskCtx.createImageData(maskWidth, maskHeight);
-          for (let i = 0; i < outTensor.data.length; i++) {
-             const val = Math.max(0, Math.min(255, Math.round(outTensor.data[i] * 255)));
-             imgData.data[i * 4] = 0;     // R
-             imgData.data[i * 4 + 1] = 0; // G
-             imgData.data[i * 4 + 2] = 0; // B
-             imgData.data[i * 4 + 3] = val; // Map AI output directly to transparency
-          }
-          maskCtx.putImageData(imgData, 0, 0);
-
-          // Get Full-Res Original Image
-          const originalImg = await createImage(currentImage);
-          const finalCanvas = document.createElement('canvas');
-          finalCanvas.width = originalImg.width;
-          finalCanvas.height = originalImg.height;
-          const finalCtx = finalCanvas.getContext('2d');
-          if (!finalCtx) throw new Error("Final context failed");
-
-          finalCtx.drawImage(originalImg, 0, 0);
-          finalCtx.globalCompositeOperation = 'destination-in';
-          // Scales the mask flawlessly to the massive original resolution
-          finalCtx.drawImage(maskCanvas, 0, 0, finalCanvas.width, finalCanvas.height);
-          
-          pushToGlobalHistory(finalCanvas.toDataURL('image/png'));
-          removedSuccessfully = true;
-        } catch (hfError) {
-          console.warn("Manual RMBG-1.4 engine failed. Falling back to Imgly...", hfError);
-        }
-      }
-
-      // Fail-safe Fallback 
-      if (!removedSuccessfully) {
-        const fallbackModel = selectedModel === 'briaai/RMBG-1.4' ? 'isnet' : selectedModel;
-        const bgConfig: Config = { model: fallbackModel as any, output: { format: "image/png" } }
-        
-        const imageBlob = await imglyRemoveBackground(currentImage, bgConfig) 
-        pushToGlobalHistory(URL.createObjectURL(imageBlob))
-      }
-
-    } catch (error) {
-      console.error("BG Removal Critical Error:", error)
-      alert("Failed to remove background. Ensure you have a stable internet connection.")
-    } finally {
-      setIsRemovingBg(false)
-    }
+    ctx.filter = `brightness(${liveFilters.b}%) contrast(${liveFilters.c}%) saturate(${liveFilters.s}%) sepia(${liveFilters.sep}%)`
+    ctx.drawImage(img, 0, 0)
+    
+    pushToGlobalHistory(canvas.toDataURL('image/png'))
+    setLiveFilters(defaultFilters)
+    if (switchTool) setActiveTool('export')
   }
 
-  const handleApplyTransform = async () => {
+  const handleApplyTransform = async (switchTool: boolean = true) => {
     const img = await createImage(currentImage)
     const canvas = document.createElement('canvas')
     const ctx = canvas.getContext('2d')
@@ -238,8 +217,181 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
     ctx.drawImage(img, -img.width / 2, -img.height / 2, img.width, img.height)
 
     pushToGlobalHistory(canvas.toDataURL('image/png'))
-    setActiveTool('export')
     setLiveTransform({ rotate: 0, flipH: false, flipV: false, radius: 0 })
+    if (switchTool) setActiveTool('export')
+  }
+
+  const changeTool = async (newTool: ToolType) => {
+    if (activeTool === 'enhance' && (liveFilters.b !== 100 || liveFilters.c !== 100 || liveFilters.s !== 100 || liveFilters.sep !== 0)) {
+      await handleApplyEnhancements(false)
+    }
+    if (activeTool === 'transform' && (liveTransform.rotate !== 0 || liveTransform.flipH || liveTransform.flipV || liveTransform.radius !== 0)) {
+      await handleApplyTransform(false)
+    }
+    if (activeTool === 'crop' && newTool !== 'crop') {
+      setImageZoom(1)
+      setCropAspect(undefined)
+      setCropPreset('free')
+      setCrop({ unit: '%', width: 50, height: 50, x: 25, y: 25 })
+    }
+    setActiveTool(newTool)
+  }
+
+  const handleRemoveBg = async () => {
+    setIsRemovingBg(true)
+    try {
+      const optimizedDataUrl = await optimizeImageForAI(currentImage)
+      let removedSuccessfully = false;
+
+      if (selectedModel === 'briaai/RMBG-1.4') {
+        try {
+          const { AutoModel, AutoProcessor, RawImage, env } = await import('@huggingface/transformers');
+          env.allowLocalModels = false; 
+          const model = await AutoModel.from_pretrained(selectedModel, { config: { model_type: 'custom' } as any });
+          const processor = await AutoProcessor.from_pretrained(selectedModel, {
+            config: {
+              do_normalize: true, do_pad: false, do_rescale: true, do_resize: true,
+              image_mean: [0.5, 0.5, 0.5], feature_extractor_type: "ImageFeatureExtractor",
+              image_std: [1, 1, 1], resample: 2, rescale_factor: 0.00392156862745098,
+              size: { width: 1024, height: 1024 }
+            } as any
+          });
+
+          const imageToProcess = await RawImage.fromURL(optimizedDataUrl);
+          const { pixel_values } = await processor(imageToProcess);
+          const outputs = await model({ input: pixel_values });
+          const outTensor = Object.values(outputs)[0] as any;
+          if (!outTensor || !outTensor.data) throw new Error("Invalid tensor output");
+
+          const maskCanvas = document.createElement('canvas');
+          maskCanvas.width = outTensor.dims[3];
+          maskCanvas.height = outTensor.dims[2];
+          const maskCtx = maskCanvas.getContext('2d');
+          if (!maskCtx) throw new Error("Mask Context failed");
+
+          const imgData = maskCtx.createImageData(maskCanvas.width, maskCanvas.height);
+          for (let i = 0; i < outTensor.data.length; i++) {
+             const val = Math.max(0, Math.min(255, Math.round(outTensor.data[i] * 255)));
+             imgData.data[i * 4] = 0; imgData.data[i * 4 + 1] = 0; imgData.data[i * 4 + 2] = 0; imgData.data[i * 4 + 3] = val;
+          }
+          maskCtx.putImageData(imgData, 0, 0);
+
+          const originalImg = await createImage(currentImage);
+          const finalCanvas = document.createElement('canvas');
+          finalCanvas.width = originalImg.width;
+          finalCanvas.height = originalImg.height;
+          const finalCtx = finalCanvas.getContext('2d');
+          if (!finalCtx) throw new Error("Final context failed");
+
+          finalCtx.drawImage(originalImg, 0, 0);
+          finalCtx.globalCompositeOperation = 'destination-in';
+          finalCtx.drawImage(maskCanvas, 0, 0, finalCanvas.width, finalCanvas.height);
+          
+          pushToGlobalHistory(finalCanvas.toDataURL('image/png'));
+          removedSuccessfully = true;
+        } catch (hfError) {
+          console.warn("Manual RMBG-1.4 engine failed. Falling back to Imgly...", hfError);
+        }
+      }
+
+      if (!removedSuccessfully) {
+        const fallbackModel = selectedModel === 'briaai/RMBG-1.4' ? 'isnet' : selectedModel;
+        const bgConfig: Config = { model: fallbackModel as any, output: { format: "image/png" } }
+        const imageBlob = await imglyRemoveBackground(currentImage, bgConfig) 
+        pushToGlobalHistory(URL.createObjectURL(imageBlob))
+      }
+    } catch (error) {
+      console.error("BG Removal Critical Error:", error)
+      alert("Failed to remove background. Ensure you have a stable internet connection.")
+    } finally {
+      setIsRemovingBg(false)
+    }
+  }
+
+  const handleImageZoomChange = (newZoom: number) => {
+    const oldZoom = imageZoom
+    const R = newZoom / oldZoom
+    setImageZoom(newZoom)
+    
+    if (crop.width && crop.height) {
+      let currentW = crop.width;
+      let currentH = crop.height;
+      let currentX = crop.x;
+      let currentY = crop.y;
+
+      if (crop.unit === '%') {
+         const imgW = baseRenderDims.w * oldZoom;
+         const imgH = baseRenderDims.h * oldZoom;
+         currentW = (crop.width / 100) * imgW;
+         currentH = (crop.height / 100) * imgH;
+         currentX = (crop.x / 100) * imgW;
+         currentY = (crop.y / 100) * imgH;
+      }
+
+      const cx = currentX + currentW / 2
+      const cy = currentY + currentH / 2
+      
+      const newCx = cx * R
+      const newCy = cy * R
+      
+      let nx = newCx - currentW / 2
+      let ny = newCy - currentH / 2
+      
+      const newImgW = baseRenderDims.w * newZoom
+      const newImgH = baseRenderDims.h * newZoom
+      
+      nx = Math.max(0, Math.min(nx, newImgW - currentW))
+      ny = Math.max(0, Math.min(ny, newImgH - currentH))
+
+      const newCrop = {
+        unit: 'px' as const,
+        width: currentW,
+        height: currentH,
+        x: nx,
+        y: ny
+      }
+      setCrop(newCrop)
+      setCompletedCrop(newCrop)
+    }
+  }
+
+  const handleAspectChange = (val: string) => {
+    setCropPreset(val)
+    let newAspect: number | undefined = undefined
+    
+    if (val === 'square') newAspect = 1
+    else if (val === 'passport') newAspect = 472 / 591
+    else if (val === 'stamp') newAspect = 236 / 295
+    else if (val === '16:9') newAspect = 16 / 9
+
+    setCropAspect(newAspect)
+
+    const currentImgW = baseRenderDims.w * imageZoom
+    const currentImgH = baseRenderDims.h * imageZoom
+
+    // The crop frame calculates strictly off screen size so it never blows up when you zoom
+    let targetFrameW = baseRenderDims.w * 0.7
+    let targetFrameH = baseRenderDims.h * 0.7
+
+    if (newAspect) {
+      const frameAspect = targetFrameW / targetFrameH
+      if (frameAspect > newAspect) {
+        targetFrameW = targetFrameH * newAspect
+      } else {
+        targetFrameH = targetFrameW / newAspect
+      }
+    }
+
+    const calculatedCrop: Crop = {
+      unit: 'px',
+      width: targetFrameW,
+      height: targetFrameH,
+      x: (currentImgW - targetFrameW) / 2,
+      y: (currentImgH - targetFrameH) / 2
+    }
+    
+    setCrop(calculatedCrop)
+    setCompletedCrop(calculatedCrop)
   }
 
   const handleApplyCrop = async () => {
@@ -252,87 +404,120 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
     const scaleX = image.naturalWidth / image.width
     const scaleY = image.naturalHeight / image.height
 
-    canvas.width = completedCrop.width * scaleX
-    canvas.height = completedCrop.height * scaleY
+    let sourceCropX = completedCrop.x * scaleX
+    let sourceCropY = completedCrop.y * scaleY
+    let sourceCropW = completedCrop.width * scaleX
+    let sourceCropH = completedCrop.height * scaleY
+
+    if (completedCrop.unit === '%') {
+      sourceCropX = (completedCrop.x / 100) * image.naturalWidth
+      sourceCropY = (completedCrop.y / 100) * image.naturalHeight
+      sourceCropW = (completedCrop.width / 100) * image.naturalWidth
+      sourceCropH = (completedCrop.height / 100) * image.naturalHeight
+    }
+
+    let targetW = sourceCropW
+    let targetH = sourceCropH
+
+    if (cropPreset === 'passport') { 
+      targetW = 472
+      targetH = 591 
+    } else if (cropPreset === 'stamp') { 
+      targetW = 236
+      targetH = 295 
+    }
+
+    canvas.width = targetW
+    canvas.height = targetH
 
     ctx.drawImage(
       image,
-      completedCrop.x * scaleX, 
-      completedCrop.y * scaleY, 
-      completedCrop.width * scaleX, 
-      completedCrop.height * scaleY,
+      sourceCropX, 
+      sourceCropY, 
+      sourceCropW, 
+      sourceCropH,
       0, 
       0, 
-      canvas.width, 
-      canvas.height
+      targetW, 
+      targetH
     )
+    
     pushToGlobalHistory(canvas.toDataURL('image/png'))
-    setActiveTool('export')
+
+    if (cropPreset === 'passport') {
+      setPresetSize('472x591')
+      setResizeWidth(472)
+      setResizeHeight(591)
+    } else if (cropPreset === 'stamp') {
+      setPresetSize('236x295')
+      setResizeWidth(236)
+      setResizeHeight(295)
+    }
+    
     setCropAspect(undefined)
+    setCropPreset('free')
+    setImageZoom(1)
+    setCrop({ unit: '%', width: 50, height: 50, x: 25, y: 25 })
+    changeTool('export')
   }
 
   const handleAutoEnhance = () => {
     setLiveFilters({ b: 110, c: 105, s: 115, sep: 0 })
   }
 
-  const handleApplyEnhancements = async () => {
-    const img = await createImage(currentImage)
-    const canvas = document.createElement('canvas')
-    canvas.width = img.width
-    canvas.height = img.height
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-
-    ctx.filter = `brightness(${liveFilters.b}%) contrast(${liveFilters.c}%) saturate(${liveFilters.s}%) sepia(${liveFilters.sep}%)`
-    ctx.drawImage(img, 0, 0)
-    
-    pushToGlobalHistory(canvas.toDataURL('image/png'))
-    setActiveTool('export')
-    setLiveFilters(defaultFilters)
-  }
-
   const handleApplyResize = async () => {
     const img = await createImage(currentImage)
-    let targetWidth = img.width
-    let targetHeight = img.height
     
-    const rw = typeof resizeWidth === 'number' ? resizeWidth : null;
-    const rh = typeof resizeHeight === 'number' ? resizeHeight : null;
+    const rw = typeof resizeWidth === 'number' ? resizeWidth : null
+    const rh = typeof resizeHeight === 'number' ? resizeHeight : null
 
     if (!rw && !rh) {
-      setActiveTool('export')
+      changeTool('export')
       return
     }
 
+    let finalCanvasWidth = rw || img.width
+    let finalCanvasHeight = rh || img.height
+    
+    let drawWidth = finalCanvasWidth
+    let drawHeight = finalCanvasHeight
+    let drawX = 0
+    let drawY = 0
+
     if (maintainRatio) {
       if (rw && rh) {
-        const ratio = Math.min(rw / img.width, rh / img.height);
-        targetWidth = Math.max(1, Math.round(img.width * ratio));
-        targetHeight = Math.max(1, Math.round(img.height * ratio));
+        finalCanvasWidth = rw
+        finalCanvasHeight = rh
+        const ratio = Math.min(rw / img.width, rh / img.height)
+        drawWidth = Math.max(1, Math.round(img.width * ratio))
+        drawHeight = Math.max(1, Math.round(img.height * ratio))
+        drawX = Math.round((rw - drawWidth) / 2)
+        drawY = Math.round((rh - drawHeight) / 2)
       } else if (rw) {
-        targetWidth = rw;
-        targetHeight = Math.max(1, Math.round((img.height * rw) / img.width));
+        finalCanvasWidth = rw
+        finalCanvasHeight = Math.max(1, Math.round((img.height * rw) / img.width))
+        drawWidth = finalCanvasWidth
+        drawHeight = finalCanvasHeight
       } else if (rh) {
-        targetHeight = rh;
-        targetWidth = Math.max(1, Math.round((img.width * rh) / img.height));
+        finalCanvasHeight = rh
+        finalCanvasWidth = Math.max(1, Math.round((img.width * rh) / img.height))
+        drawWidth = finalCanvasWidth
+        drawHeight = finalCanvasHeight
       }
-    } else {
-      targetWidth = rw || img.width;
-      targetHeight = rh || img.height;
     }
 
     const canvas = document.createElement('canvas')
-    canvas.width = targetWidth
-    canvas.height = targetHeight
+    canvas.width = finalCanvasWidth
+    canvas.height = finalCanvasHeight
     const ctx = canvas.getContext('2d')
     if (!ctx) return
     
-    ctx.drawImage(img, 0, 0, targetWidth, targetHeight)
+    ctx.drawImage(img, drawX, drawY, drawWidth, drawHeight)
     pushToGlobalHistory(canvas.toDataURL('image/png'))
-    setActiveTool('export')
     setPresetSize('custom')
     setResizeWidth('')
     setResizeHeight('')
+    changeTool('export')
   }
 
   const handlePresetChange = (val: string) => {
@@ -341,7 +526,7 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
       const [w, h] = val.split('x').map(Number)
       setResizeWidth(w)
       setResizeHeight(h)
-      setMaintainRatio(false) 
+      setMaintainRatio(true) 
     } else {
       setResizeWidth('')
       setResizeHeight('')
@@ -364,14 +549,14 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
       ctx.fillStyle = bgColor
       ctx.fillRect(0, 0, canvasW, canvasH)
     } else if (bgType === 'gradient') {
-      let x0 = 0, y0 = 0, x1 = canvasW, y1 = canvasH;
+      let x0 = 0, y0 = 0, x1 = canvasW, y1 = canvasH
       if (bgGradientDir === 'to bottom') {
-        x1 = 0;
+        x1 = 0
       } else if (bgGradientDir === 'to right') {
-        y1 = 0;
+        y1 = 0
       } else if (bgGradientDir === 'to top right') {
-        y0 = canvasH;
-        y1 = 0;
+        y0 = canvasH
+        y1 = 0
       }
       
       const grad = ctx.createLinearGradient(x0, y0, x1, y1)
@@ -512,7 +697,6 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
     link.click()
   }
 
-  const isLosslessFormat = exportFormat === 'image/png' || exportFormat === 'application/pdf' || exportFormat === 'image/x-icon'
   const sourceFormatDisplay = file.type.split('/')[1]?.toUpperCase() || 'UNKNOWN'
 
   const previewStyle = {
@@ -527,12 +711,12 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
     <div className="bg-white w-full rounded-xl border border-slate-200 shadow-sm flex flex-col lg:flex-row h-auto lg:h-[650px] min-h-[650px] overflow-hidden">
       
       {/* Dynamic Preview Area */}
-      <div className="flex-1 bg-slate-100 p-4 flex items-center justify-center relative group min-h-[400px] lg:min-h-full order-1 lg:order-2 overflow-hidden border-b lg:border-b-0">
+      <div className="flex-1 bg-slate-100 flex relative group min-h-[400px] lg:min-h-full order-1 lg:order-2 overflow-hidden border-b lg:border-b-0">
         <button onClick={onCancel} className="absolute top-3 right-3 z-50 bg-white/90 text-slate-800 p-2 rounded-full shadow-md hover:bg-red-500 hover:text-white transition-colors" title="Close Image">
           <X className="w-5 h-5" />
         </button>
 
-        <div className="absolute inset-0 z-0 overflow-hidden flex items-center justify-center" 
+        <div className="absolute inset-0 z-0 overflow-hidden flex items-center justify-center pointer-events-none" 
           style={{ 
             backgroundColor: bgType === 'color' ? bgColor : 'transparent',
             backgroundImage: bgType === 'gradient' ? `linear-gradient(${bgGradientDir}, ${bgGradientColor1}, ${bgGradientColor2})` : 'none'
@@ -542,15 +726,45 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
           )}
         </div>
         
-        <div className="relative z-10 w-full h-full flex items-center justify-center p-2 overflow-hidden">
+        {/* Scrollable workspace designed for deeply zoomed elements to not clip or restrict padding */}
+        <div className="relative z-10 w-full h-full overflow-auto custom-scrollbar" ref={previewContainerRef}>
           {activeTool === 'crop' ? (
-            <div className="w-full h-full flex items-center justify-center overflow-hidden">
-              <ReactCrop crop={crop} onChange={c => setCrop(c)} onComplete={c => setCompletedCrop(c)} aspect={cropAspect} className="max-w-full max-h-full">
-                <img ref={imgRef} src={currentImage} alt="Crop Preview" className="w-auto h-auto max-w-full max-h-full" style={{ maxHeight: '55vh', ...previewStyle }} />
-              </ReactCrop>
+            <div style={{ display: 'flex', minWidth: '100%', minHeight: '100%', padding: '16px' }}>
+              <div style={{ margin: 'auto' }}>
+                <ReactCrop 
+                  crop={crop} 
+                  onChange={(_, percentCrop) => setCrop(percentCrop)} 
+                  onComplete={(_, percentCrop) => setCompletedCrop(percentCrop)} 
+                  aspect={cropAspect} 
+                >
+                  <img 
+                    ref={imgRef} 
+                    src={currentImage} 
+                    alt="Crop Preview" 
+                    style={{ 
+                      width: baseRenderDims.w ? `${baseRenderDims.w * imageZoom}px` : 'auto', 
+                      height: baseRenderDims.h ? `${baseRenderDims.h * imageZoom}px` : 'auto',
+                      maxWidth: 'none',
+                      maxHeight: 'none',
+                      ...previewStyle 
+                    }} 
+                  />
+                </ReactCrop>
+              </div>
             </div>
           ) : (
-            <img src={currentImage} alt="Workspace" className="max-w-full max-h-full object-contain drop-shadow-md transition-all" style={previewStyle} />
+            <div className="w-full h-full flex items-center justify-center p-4">
+              <img 
+                src={currentImage} 
+                alt="Workspace" 
+                style={{ 
+                  maxWidth: '100%',
+                  maxHeight: '100%',
+                  objectFit: 'contain',
+                  ...previewStyle 
+                }} 
+              />
+            </div>
           )}
         </div>
       </div>
@@ -567,7 +781,7 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
           
           {/* Background Tool */}
           <div className={`border border-slate-200 rounded-lg flex-shrink-0 bg-white shadow-sm transition-all relative ${activeTool === 'bg' ? 'z-20' : 'z-0'}`}>
-            <button onClick={() => setActiveTool(activeTool === 'bg' ? null : 'bg')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activeTool === 'bg' ? 'rounded-t-lg' : 'rounded-lg'}`}>
+            <button onClick={() => changeTool(activeTool === 'bg' ? null : 'bg')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activeTool === 'bg' ? 'rounded-t-lg' : 'rounded-lg'}`}>
               <Eraser className="w-4 h-4 text-[#6384A3]" /> Background Removal
             </button>
             {activeTool === 'bg' && (
@@ -651,7 +865,7 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
 
           {/* Transform & Shape Tool */}
           <div className={`border border-slate-200 rounded-lg flex-shrink-0 bg-white shadow-sm transition-all relative ${activeTool === 'transform' ? 'z-20' : 'z-0'}`}>
-            <button onClick={() => setActiveTool(activeTool === 'transform' ? null : 'transform')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activeTool === 'transform' ? 'rounded-t-lg' : 'rounded-lg'}`}>
+            <button onClick={() => changeTool(activeTool === 'transform' ? null : 'transform')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activeTool === 'transform' ? 'rounded-t-lg' : 'rounded-lg'}`}>
               <RotateCw className="w-4 h-4 text-[#6384A3]" /> Transform & Shape
             </button>
             {activeTool === 'transform' && (
@@ -678,8 +892,8 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
                   <button onClick={() => setLiveTransform({ rotate: 0, flipH: false, flipV: false, radius: 0 })} className="flex-[0.5] py-2 text-[10px] uppercase tracking-wider font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50 flex justify-center items-center" title="Reset">
                     <RefreshCcw className="w-3.5 h-3.5" />
                   </button>
-                  <button onClick={() => { setActiveTool('export'); setLiveTransform({ rotate: 0, flipH: false, flipV: false, radius: 0 }); }} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50">Cancel</button>
-                  <button onClick={handleApplyTransform} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-white bg-[#6384A3] rounded hover:bg-[#4f6a83]">Apply</button>
+                  <button onClick={() => { setLiveTransform({ rotate: 0, flipH: false, flipV: false, radius: 0 }); changeTool('export'); }} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50">Cancel</button>
+                  <button onClick={() => handleApplyTransform(true)} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-white bg-[#6384A3] rounded hover:bg-[#4f6a83]">Apply</button>
                 </div>
               </div>
             )}
@@ -687,7 +901,7 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
           
           {/* Frame & Crop Tool */}
           <div className={`border border-slate-200 rounded-lg flex-shrink-0 bg-white shadow-sm transition-all relative ${activeTool === 'crop' ? 'z-20' : 'z-0'}`}>
-            <button onClick={() => setActiveTool(activeTool === 'crop' ? null : 'crop')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activeTool === 'crop' ? 'rounded-t-lg' : 'rounded-lg'}`}>
+            <button onClick={() => changeTool(activeTool === 'crop' ? null : 'crop')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activeTool === 'crop' ? 'rounded-t-lg' : 'rounded-lg'}`}>
               <CropIcon className="w-4 h-4 text-[#6384A3]" /> Frame & Crop
             </button>
             {activeTool === 'crop' && (
@@ -695,24 +909,42 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
                 <div className="space-y-2">
                   <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Crop Aspect Ratio</label>
                   <CustomDropdown 
-                    value={cropAspect ? cropAspect.toString() : 'free'}
-                    onChange={(val) => setCropAspect(val === 'free' ? undefined : Number(val))}
+                    value={cropPreset}
+                    onChange={handleAspectChange}
                     direction="down"
                     options={[
                       { value: 'free', label: 'Freehand (No Aspect)' },
-                      { value: '1', label: 'Square (1:1)' },
-                      { value: (4/5).toString(), label: 'BD Passport / Stamp (4:5)' },
-                      { value: (16/9).toString(), label: 'Widescreen (16:9)' }
+                      { value: 'square', label: 'Square (1:1)' },
+                      { value: 'passport', label: 'BD Passport Size (40x50mm)' },
+                      { value: 'stamp', label: 'BD Stamp Size (20x25mm)' },
+                      { value: '16:9', label: 'Widescreen (16:9)' }
                     ]}
                   />
                 </div>
-                <div className="p-3 bg-blue-50 border border-blue-100 rounded text-xs text-blue-800 flex flex-col gap-1.5">
+
+                <div className="space-y-2 mt-4 border-t border-slate-100 pt-3">
+                  <div className="flex justify-between items-center text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                    <span>Image Zoom (Scale)</span>
+                    <span className="text-[#6384A3]">{imageZoom.toFixed(2)}x</span>
+                  </div>
+                  <input 
+                    type="range" 
+                    min="0.1" 
+                    max="5" 
+                    step="0.05" 
+                    value={imageZoom} 
+                    onChange={(e) => handleImageZoomChange(Number(e.target.value))} 
+                    className="w-full accent-[#6384A3]" 
+                  />
+                </div>
+
+                <div className="p-3 bg-blue-50 border border-blue-100 rounded text-xs text-blue-800 flex flex-col gap-1.5 mt-2">
                   <span className="font-bold flex items-center gap-1.5"><Maximize className="w-3.5 h-3.5"/> Framing Tip</span>
-                  <span className="opacity-90">Drag the edges of the box on the image to frame and "zoom" into your subject perfectly.</span>
+                  <span className="opacity-90">Zoom the image using the slider below, then drag the frame to focus exactly on your subject.</span>
                 </div>
                 <div className="flex gap-2 pt-2 border-t border-slate-100 mt-2">
-                  <button onClick={() => setActiveTool('export')} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50">Cancel</button>
-                  <button onClick={handleApplyCrop} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-white bg-[#6384A3] rounded hover:bg-[#4f6a83]">Apply Crop</button>
+                  <button onClick={() => changeTool('export')} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50">Cancel</button>
+                  <button onClick={() => handleApplyCrop()} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-white bg-[#6384A3] rounded hover:bg-[#4f6a83]">Apply Crop</button>
                 </div>
               </div>
             )}
@@ -720,7 +952,7 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
 
           {/* Enhance Tool */}
           <div className={`border border-slate-200 rounded-lg flex-shrink-0 bg-white shadow-sm transition-all relative ${activeTool === 'enhance' ? 'z-20' : 'z-0'}`}>
-            <button onClick={() => setActiveTool(activeTool === 'enhance' ? null : 'enhance')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activeTool === 'enhance' ? 'rounded-t-lg' : 'rounded-lg'}`}>
+            <button onClick={() => changeTool(activeTool === 'enhance' ? null : 'enhance')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activeTool === 'enhance' ? 'rounded-t-lg' : 'rounded-lg'}`}>
               <Sparkles className="w-4 h-4 text-[#6384A3]" /> Enhance Photo
             </button>
             {activeTool === 'enhance' && (
@@ -752,8 +984,8 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
                   <button onClick={() => setLiveFilters(defaultFilters)} className="flex-[0.5] py-2 text-[10px] uppercase tracking-wider font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50 flex justify-center items-center" title="Reset">
                     <RefreshCcw className="w-3.5 h-3.5" />
                   </button>
-                  <button onClick={() => { setActiveTool('export'); setLiveFilters(defaultFilters); }} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50">Cancel</button>
-                  <button onClick={handleApplyEnhancements} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-white bg-[#6384A3] rounded hover:bg-[#4f6a83]">Apply</button>
+                  <button onClick={() => { setLiveFilters(defaultFilters); changeTool('export'); }} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50">Cancel</button>
+                  <button onClick={() => handleApplyEnhancements(true)} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-white bg-[#6384A3] rounded hover:bg-[#4f6a83]">Apply</button>
                 </div>
               </div>
             )}
@@ -761,7 +993,7 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
 
           {/* Resize Output Dimensions Accordion */}
           <div className={`border border-slate-200 rounded-lg flex-shrink-0 bg-white shadow-sm transition-all relative ${activeTool === 'resize' ? 'z-20' : 'z-0'}`}>
-            <button onClick={() => setActiveTool(activeTool === 'resize' ? null : 'resize')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activeTool === 'resize' ? 'rounded-t-lg' : 'rounded-lg'}`}>
+            <button onClick={() => changeTool(activeTool === 'resize' ? null : 'resize')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activeTool === 'resize' ? 'rounded-t-lg' : 'rounded-lg'}`}>
               <Maximize className="w-4 h-4 text-[#6384A3]" /> Resize Dimensions
             </button>
             {activeTool === 'resize' && (
@@ -809,14 +1041,14 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
                       onChange={(e) => setMaintainRatio(e.target.checked)} 
                       className="w-3.5 h-3.5 accent-[#6384A3] rounded cursor-pointer" 
                     />
-                    Maintain Ratio (Fit Inside)
+                    Maintain Ratio (Fit Inside Box)
                   </label>
                 </div>
                 <div className="flex gap-2 pt-2 border-t border-slate-100 mt-2">
                   <button onClick={() => { setResizeWidth(''); setResizeHeight(''); setPresetSize('custom'); }} className="flex-[0.5] py-2 text-[10px] uppercase tracking-wider font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50 flex justify-center items-center" title="Reset">
                     <RefreshCcw className="w-3.5 h-3.5" />
                   </button>
-                  <button onClick={() => { setActiveTool('export'); setResizeWidth(''); setResizeHeight(''); }} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50">Cancel</button>
+                  <button onClick={() => { setResizeWidth(''); setResizeHeight(''); changeTool('export'); }} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-slate-600 border border-slate-200 rounded hover:bg-slate-50">Cancel</button>
                   <button onClick={handleApplyResize} className="flex-1 py-2 text-[10px] uppercase tracking-wider font-bold text-white bg-[#6384A3] rounded hover:bg-[#4f6a83]">Apply Resize</button>
                 </div>
               </div>
@@ -825,7 +1057,7 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
 
           {/* Export Settings Accordion */}
           <div className={`border border-slate-200 rounded-lg flex-shrink-0 bg-white shadow-sm mb-4 transition-all relative ${activeTool === 'export' ? 'z-20' : 'z-0'}`}>
-            <button onClick={() => setActiveTool(activeTool === 'export' ? null : 'export')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activeTool === 'export' ? 'rounded-t-lg' : 'rounded-lg'}`}>
+            <button onClick={() => changeTool(activeTool === 'export' ? null : 'export')} className={`w-full py-3 px-4 bg-slate-50 hover:bg-slate-100 text-left font-semibold text-sm flex items-center gap-3 transition-colors ${activeTool === 'export' ? 'rounded-t-lg' : 'rounded-lg'}`}>
               <Type className="w-4 h-4 text-[#6384A3]" /> Format & Export
             </button>
             {activeTool === 'export' && (
