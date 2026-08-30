@@ -113,13 +113,14 @@ const processDocumentTextExtraction = async (imageUrl: string): Promise<string> 
       const idx = (y * width + x) * 4;
       const currentGray = gray[y * width + x];
 
+      // Deep clean logic: Darker than threshold means it's text.
       if (currentGray < threshold && currentGray < 180) {
-        data[idx] = 0;    
+        data[idx] = 0;     // Force Pure Black
         data[idx + 1] = 0;
         data[idx + 2] = 0;
         data[idx + 3] = 255;
       } else {
-        data[idx + 3] = 0; 
+        data[idx + 3] = 0; // Completely transparent background
       }
     }
   }
@@ -173,12 +174,17 @@ interface SortableItemProps {
   sepia: number
   grayscale: boolean
   sharpen: number
+  watermarkText: string
+  watermarkPlacement: string
+  watermarkOpacity: number
+  addPageNumbers: boolean
+  totalPages: number
   onRemove: (id: string) => void
   onRotate: (id: string) => void
   onView: (id: string) => void
 }
 
-function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brightness, contrast, saturation, hue, sepia, grayscale, sharpen, onRemove, onRotate, onView }: SortableItemProps) {
+function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brightness, contrast, saturation, hue, sepia, grayscale, sharpen, watermarkText, watermarkPlacement, watermarkOpacity, addPageNumbers, totalPages, onRemove, onRotate, onView }: SortableItemProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
   
   const style = {
@@ -190,14 +196,7 @@ function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brigh
   const isRotated = rotation % 180 !== 0
   const imageScale = isRotated ? 0.75 : 1
 
-  const b = 100 + (brightness ?? 0);
-  const c = 100 + (contrast ?? 0);
-  const sat = 100 + (saturation ?? 0);
-  const h = hue ?? 0;
-  const sep = Math.max(0, sepia ?? 0);
-  const gray = grayscale ? 100 : 0;
-  const s = sharpen > 0 ? `url(#sharpen-${id}) ` : '';
-  const filterStyle = `${s}brightness(${b}%) contrast(${c}%) saturate(${sat}%) hue-rotate(${h}deg) grayscale(${gray}%) sepia(${sep}%)`.trim()
+  const filterStyle = getFilterString({ id, brightness, contrast, saturation, hue, sepia, grayscale, sharpen } as PageItem)
 
   return (
     <div 
@@ -208,8 +207,8 @@ function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brigh
       onClick={() => onView(id)}
       className={`relative rounded-lg overflow-hidden border ${isDragging ? 'border-[#6384A3] shadow-2xl scale-105' : 'border-slate-200'} aspect-[3/4] cursor-pointer hover:shadow-md transition-all bg-slate-100 flex items-center justify-center group touch-none`}
     >
-      <div className="w-full h-full flex items-center justify-center overflow-hidden bg-slate-100">
-        <div style={{ transform: `rotate(${rotation + fineRotation}deg) scale(${imageScale * scale})`, transition: 'transform 0.15s ease' }}>
+      <div className="w-full h-full flex items-center justify-center overflow-hidden bg-slate-100 relative">
+        <div style={{ transform: `rotate(${rotation + fineRotation}deg) scale(${imageScale * scale})`, transition: 'transform 0.15s ease', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%' }}>
           <img 
             src={url} 
             alt={`Page ${index + 1}`} 
@@ -217,9 +216,32 @@ function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brigh
             style={{ filter: filterStyle || 'none' }}
           />
         </div>
+        
+        {/* Grid View Overlays */}
+        {watermarkText && (
+          <div className="absolute inset-0 pointer-events-none overflow-hidden z-20 flex" style={{ opacity: watermarkOpacity / 100 }}>
+             <div 
+               className={`absolute font-bold text-slate-500 whitespace-nowrap opacity-50 ${
+                 watermarkPlacement === 'center' ? 'top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 -rotate-45 text-xl' :
+                 watermarkPlacement === 'top-left' ? 'top-2 left-2 text-[8px]' :
+                 watermarkPlacement === 'top-right' ? 'top-2 right-2 text-[8px]' :
+                 watermarkPlacement === 'bottom-left' ? 'bottom-6 left-2 text-[8px]' :
+                 'bottom-6 right-2 text-[8px]'
+               }`}
+             >
+               {watermarkText}
+             </div>
+          </div>
+        )}
+        {addPageNumbers && (
+          <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-20 text-slate-800 font-bold text-[8px] pointer-events-none">
+            {index + 1} / {totalPages}
+          </div>
+        )}
       </div>
       
-      <div className="absolute top-2 right-2 flex flex-col gap-2 opacity-100 z-10">
+      {/* Fixed Tools in Grid */}
+      <div className="absolute top-2 right-2 flex flex-col gap-2 opacity-100 z-30">
         <button 
           onPointerDown={(e) => { e.stopPropagation(); onRemove(id) }}
           className="bg-red-500/90 hover:bg-red-600 text-white rounded-full w-8 h-8 lg:w-6 lg:h-6 flex items-center justify-center shadow-md transition-colors"
@@ -236,7 +258,7 @@ function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brigh
         </button>
       </div>
 
-      <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-2 py-0.5 rounded font-bold shadow-sm flex items-center gap-1">
+      <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-2 py-0.5 rounded font-bold shadow-sm flex items-center gap-1 z-30">
         {index + 1}
         {(fineRotation !== 0 || scale !== 1 || brightness !== 0 || contrast !== 0 || grayscale || sepia > 0 || hue !== 0 || saturation !== 0 || sharpen > 0) && <span className="text-[#6384A3] ml-1">Edited</span>}
       </div>
@@ -283,12 +305,12 @@ type SignatureItem = {
 }
 
 type PanelId = 'security' | 'overlays' | 'compression' | 'merge' | 'split' | 'enhance' | 'signature' | 'export' | 'page-edit' | null;
+type FullScreenMode = 'edit' | 'preview' | null;
 
 export default function PdfEditor() {
   const [pages, setPages] = useState<PageItem[]>([])
   const [isProcessing, setIsProcessing] = useState(false)
   const [loadingText, setLoadingText] = useState('')
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [toast, setToast] = useState<{message: string, id: number} | null>(null)
   
   const [originalDocName, setOriginalDocName] = useState('document')
@@ -298,7 +320,7 @@ export default function PdfEditor() {
 
   // UI State
   const [activePanel, setActivePanel] = useState<PanelId>('export')
-  const [isFullscreen, setIsFullscreen] = useState(false)
+  const [fullScreenMode, setFullScreenMode] = useState<FullScreenMode>(null)
   const panelRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const [showViewerGrid, setShowViewerGrid] = useState(false)
   const [isStraightening, setIsStraightening] = useState(false)
@@ -310,7 +332,6 @@ export default function PdfEditor() {
       }, 150)
     }
 
-    // Default to grid view for Merge and Split actions
     if (activePanel === 'merge' || activePanel === 'split') {
       setShowViewerGrid(true);
     } else if (activePanel === 'page-edit' || activePanel === 'signature') {
@@ -440,7 +461,6 @@ export default function PdfEditor() {
 
           let compBytes = origBytes;
           if (enableCompression) {
-            // Simplified dynamic byte generation logic for size estimation
             compBytes = origBytes * (compressionQuality / 100) * 0.8;
           }
 
@@ -680,16 +700,21 @@ export default function PdfEditor() {
     if (idx !== -1) {
       setPreviewPageIndex(idx);
       setActivePanel('page-edit');
-      setIsFullscreen(true);
+      setFullScreenMode('edit');
       setShowViewerGrid(false);
     }
+  }
+
+  const handlePreview = async () => {
+    setFullScreenMode('preview');
+    setActivePanel('export');
   }
 
   const enterFullscreen = () => {
     if (['merge', 'split', 'security'].includes(activePanel || '')) {
       setActivePanel('page-edit')
     }
-    setIsFullscreen(true)
+    setFullScreenMode('edit')
   }
 
   const handleSigImageUpload = (sigId: string, e: React.ChangeEvent<HTMLInputElement>) => {
@@ -985,9 +1010,11 @@ export default function PdfEditor() {
 
   const renderSignatureOverlay = (ctx: 'right' | 'modal') => {
     if (!signatures || signatures.length === 0) return null;
+    const isPreview = fullScreenMode === 'preview';
+
     return signatures.filter(sig => shouldApplySignature(previewPageIndex, sig.applyMode, sig.customPages)).map(sig => {
       const placement = getSigPlacement(sig, previewPageIndex)
-      const isActive = activeSigId === sig.id
+      const isActive = activeSigId === sig.id && !isPreview;
       const sigIndex = signatures.findIndex(s => s.id === sig.id);
       
       return (
@@ -999,10 +1026,10 @@ export default function PdfEditor() {
             top: `${placement.y}%`,
             transform: 'translate(-50%, -50%)',
             opacity: placement.opacity / 100,
-            pointerEvents: 'none'
+            pointerEvents: isPreview ? 'none' : 'auto'
           }}
         >
-          <div className="relative pointer-events-auto group" onPointerDown={(e) => { e.stopPropagation(); handlePointerDownSig(ctx, sig.id); }}>
+          <div className="relative pointer-events-auto group" onPointerDown={(e) => { if (!isPreview) { e.stopPropagation(); handlePointerDownSig(ctx, sig.id); } }}>
             {sig.mode === 'text' ? (
               <span style={{ fontFamily: sig.font, color: sig.color, fontSize: `${(placement.scale / 100) * 3}rem`, whiteSpace: 'nowrap', display: 'block', padding: '4px' }}>
                 {sig.text || ' '}
@@ -1013,7 +1040,7 @@ export default function PdfEditor() {
               <div style={{ width: `${placement.scale * 3}px`, height: '40px' }} /> 
             )}
             
-            <div className={`absolute inset-0 border-2 border-dashed ${(isDraggingSig || resizingState?.sigId === sig.id) && draggingContext === ctx && isActive ? 'border-blue-500 bg-blue-500/10' : isActive ? 'border-blue-300' : 'border-transparent group-hover:border-slate-300'} rounded pointer-events-none transition-colors`} />
+            <div className={`absolute inset-0 border-2 border-dashed ${(isDraggingSig || resizingState?.sigId === sig.id) && draggingContext === ctx && isActive ? 'border-blue-500 bg-blue-500/10' : isActive ? 'border-blue-300' : 'border-transparent hover:border-slate-300'} rounded pointer-events-none transition-colors`} style={{ display: isPreview ? 'none' : 'block' }} />
             
             {isActive && (
                <div className="absolute -top-10 right-0 z-30 flex items-center gap-1">
@@ -1174,16 +1201,14 @@ export default function PdfEditor() {
         </div>
 
         <div className="pb-4 border-b border-slate-100">
-          <div className="flex items-center justify-between mb-4">
-            <h4 className="text-[10px] font-bold text-slate-800 uppercase tracking-widest">Color Adjustments</h4>
-          </div>
+          <h4 className="text-[10px] font-bold text-slate-800 uppercase tracking-widest mb-3">Color Adjustments</h4>
           <div className="grid grid-cols-2 gap-x-6 gap-y-4">
             <SliderControl label="Exposure" value={page.brightness} min={-100} max={100} onPointerDown={saveHistory} onChange={(v) => updatePageAttributes(page.id, { brightness: v })} />
             <SliderControl label="Contrast" value={page.contrast} min={-100} max={100} onPointerDown={saveHistory} onChange={(v) => updatePageAttributes(page.id, { contrast: v })} />
             <SliderControl label="Saturation" value={page.saturation} min={-100} max={100} onPointerDown={saveHistory} onChange={(v) => updatePageAttributes(page.id, { saturation: v })} />
-            <SliderControl label="Warmth" value={page.sepia} min={-100} max={100} onPointerDown={saveHistory} onChange={(v) => updatePageAttributes(page.id, { sepia: v })} />
+            <SliderControl label="Warmth" value={page.sepia} min={0} max={100} onPointerDown={saveHistory} onChange={(v) => updatePageAttributes(page.id, { sepia: v })} />
             <SliderControl label="Hue" value={page.hue} min={-180} max={180} onPointerDown={saveHistory} onChange={(v) => updatePageAttributes(page.id, { hue: v })} unit="°" />
-            <SliderControl label="Sharpen" value={page.sharpen} min={-100} max={100} onPointerDown={saveHistory} onChange={(v) => updatePageAttributes(page.id, { sharpen: v })} />
+            <SliderControl label="Sharpen" value={page.sharpen} min={0} max={100} onPointerDown={saveHistory} onChange={(v) => updatePageAttributes(page.id, { sharpen: v })} />
           </div>
           
           <label className="flex items-center gap-2 mt-4 text-[10px] font-bold text-slate-700 uppercase tracking-widest cursor-pointer">
@@ -1365,7 +1390,7 @@ export default function PdfEditor() {
         <Plus className="w-3.5 h-3.5" /> Add Signature
       </button>
 
-      {context === 'sidebar' && !isFullscreen && pages.length > 0 && (
+      {context === 'sidebar' && !fullScreenMode && pages.length > 0 && (
         <button onClick={enterFullscreen} disabled={pages.length === 0} className="w-full py-2.5 bg-slate-800 text-white font-bold text-[10px] uppercase tracking-widest rounded-lg hover:bg-black transition-colors shadow-sm flex items-center justify-center gap-2 mt-2">
           <Move className="w-3.5 h-3.5" /> Open Full Screen
         </button>
@@ -1847,125 +1872,6 @@ export default function PdfEditor() {
     }
   }
 
-  const handlePreview = async () => {
-    setIsProcessing(true)
-    setLoadingText('Generating Preview...')
-    await new Promise(r => setTimeout(r, 50))
-    try {
-      const blob = await generatePdfBlob()
-      if (blob) setPreviewUrl(URL.createObjectURL(blob))
-    } catch (e) {
-      alert("Failed to generate preview.")
-    } finally {
-      setIsProcessing(false)
-      setLoadingText('')
-    }
-  }
-
-  const exportAsPdf = async () => {
-    setIsProcessing(true)
-    setLoadingText('Saving Document...')
-    await new Promise(r => setTimeout(r, 50))
-    try {
-      const blob = await generatePdfBlob()
-      if (blob) {
-        const url = URL.createObjectURL(blob)
-        const link = document.createElement('a')
-        link.href = url
-        link.download = `${originalDocName}_zs_converter.pdf`
-        link.click()
-        showToast('PDF exported successfully')
-      }
-    } catch (e) {
-      alert("Failed to save PDF.")
-    } finally {
-      setIsProcessing(false)
-      setLoadingText('')
-    }
-  }
-
-  const exportAsImages = async () => {
-    if (pages.length === 0) return
-    setIsProcessing(true)
-    setLoadingText('Zipping images...')
-    await new Promise(r => setTimeout(r, 50))
-    try {
-      const zip = new JSZip()
-      for (let i = 0; i < pages.length; i++) {
-        const canvas = await renderPageToCanvas(pages[i], i, false)
-        if (!canvas) continue
-        const blob = await new Promise<Blob | null>(res => canvas.toBlob(res, 'image/jpeg', 0.95))
-        if (blob) zip.file(`page-${String(i + 1).padStart(3, '0')}.jpg`, blob)
-      }
-      const zipContent = await zip.generateAsync({ type: 'blob' })
-      const downloadUrl = URL.createObjectURL(zipContent)
-      const link = document.createElement('a')
-      link.href = downloadUrl
-      link.download = `${originalDocName}_images_zs_converter.zip`
-      link.click()
-      showToast('Images zip downloaded')
-    } catch (error) {
-      alert("Failed to export images.")
-    } finally {
-      setIsProcessing(false)
-      setLoadingText('')
-    }
-  }
-
-  const renderPreviewCanvas = (page: PageItem, isFull: boolean) => {
-    const is90 = page.rotation % 180 !== 0;
-    const vhBase = isFull ? (activePanel === 'page-edit' ? 80 : 75) : 60;
-    const vwBase = isFull ? 80 : 50;
-    const zoom = isFull ? sigZoom : 1;
-
-    return (
-      <div className="m-auto flex items-center justify-center min-w-max min-h-max relative p-4">
-
-        {/* The Rotatable Container that mimics the paper bounds */}
-        <div 
-          ref={isFull ? modalSigRef : rightSideSigRef}
-          className="relative touch-none inline-flex items-center justify-center"
-          onPointerDown={() => setOpenMenuSigId(null)}
-          onPointerMove={handlePointerMoveSig}
-          onPointerUp={handlePointerUpSig}
-          onPointerLeave={handlePointerUpSig}
-          style={{
-            maxHeight: is90 ? '90vw' : `${vhBase * zoom}vh`,
-            maxWidth: is90 ? `${vhBase * zoom}vh` : '90vw',
-            transform: `rotate(${page.rotation}deg) scale(${activePanel === 'page-edit' ? page.scale || 1 : 1})`,
-            transition: 'transform 0.15s ease-out'
-          }}
-        >
-          {/* The Image inside the bounds */}
-          <img 
-            src={page.url} 
-            className="block pointer-events-none w-auto h-auto bg-white shadow-xl" 
-            style={{ 
-              maxHeight: is90 ? '90vw' : `${vhBase * zoom}vh`,
-              maxWidth: is90 ? `${vhBase * zoom}vh` : '90vw',
-              transform: `rotate(${page.fineRotation || 0}deg)`,
-              filter: getFilterString(page)
-            }}
-            alt="Preview" 
-            draggable={false}
-          />
-          
-          {/* Straightener Axis Lines (Rotates with outer box naturally) */}
-          {activePanel === 'page-edit' && isStraightening && (
-             <div className="absolute inset-0 pointer-events-none border border-amber-600 z-20 flex items-center justify-center mix-blend-difference overflow-visible">
-               <div className="w-[150%] h-[1.5px] bg-amber-500 absolute top-1/2 -translate-y-1/2 opacity-75" />
-               <div className="h-[150%] w-[1.5px] bg-amber-500 absolute left-1/2 -translate-x-1/2 opacity-75" />
-             </div>
-          )}
-          
-          <div className="absolute inset-0 pointer-events-none">
-            {renderSignatureOverlay(isFull ? 'modal' : 'right')}
-          </div>
-        </div>
-      </div>
-    );
-  };
-
   return (
     <>
       {/* SVG Filters (Global defs for CSS Sharpening) */}
@@ -2036,13 +1942,13 @@ export default function PdfEditor() {
             <>
               {/* Static overlay tools for single page view */}
               {!showViewerGrid && sigPageTarget && (
-                <div className="absolute top-6 left-6 z-50 flex gap-3 pointer-events-auto">
+                <div className="absolute top-4 left-4 z-50 flex gap-2 pointer-events-auto opacity-100 transition-opacity">
                   <button 
                     onClick={(e) => { e.stopPropagation(); rotatePage(sigPageTarget.id) }} 
-                    className="bg-slate-800 text-white p-3 rounded-full shadow-lg hover:bg-black transition-transform hover:scale-105"
+                    className="bg-slate-800 text-white p-2.5 rounded-full shadow-lg hover:bg-black transition-transform hover:scale-105"
                     title="Rotate 90°"
                   >
-                    <RotateCw className="w-5 h-5"/>
+                    <RotateCw className="w-4 h-4"/>
                   </button>
                   <button 
                     onClick={(e) => { 
@@ -2050,22 +1956,22 @@ export default function PdfEditor() {
                       removePage(sigPageTarget.id);
                       if (pages.length <= 1) setShowViewerGrid(true); 
                     }} 
-                    className="bg-red-500 text-white p-3 rounded-full shadow-lg hover:bg-red-600 transition-transform hover:scale-105"
+                    className="bg-red-500 text-white p-2.5 rounded-full shadow-lg hover:bg-red-600 transition-transform hover:scale-105"
                     title="Delete Page"
                   >
-                    <Trash2 className="w-5 h-5"/>
+                    <Trash2 className="w-4 h-4"/>
                   </button>
                 </div>
               )}
 
               {!showViewerGrid && (
-                <div className="absolute top-6 right-6 z-50 pointer-events-auto">
+                <div className="absolute top-4 right-4 z-50 pointer-events-auto">
                   <button
                     onClick={enterFullscreen}
-                    className="bg-white hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-lg shadow-lg text-[11px] font-bold uppercase tracking-widest flex items-center gap-2 border border-slate-200 transition-transform hover:scale-105"
+                    className="bg-white hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg shadow-lg text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 border border-slate-200 transition-transform hover:scale-105"
                     title="Open Full Screen"
                   >
-                    <Move className="w-4 h-4" /> Full Screen
+                    <Move className="w-3.5 h-3.5" /> Full Screen
                   </button>
                 </div>
               )}
@@ -2099,9 +2005,13 @@ export default function PdfEditor() {
                             sepia={page.sepia}
                             sharpen={page.sharpen || 0}
                             grayscale={page.grayscale}
+                            watermarkText={watermarkText}
+                            watermarkPlacement={watermarkPlacement}
+                            watermarkOpacity={watermarkOpacity}
+                            addPageNumbers={addPageNumbers}
+                            totalPages={pages.length}
                             onRemove={removePage} 
                             onRotate={rotatePage}
-                            onEdit={handleEditPage}
                             onView={(id) => {
                               const idx = pages.findIndex(p => p.id === id);
                               if(idx !== -1) {
@@ -2122,7 +2032,77 @@ export default function PdfEditor() {
                   </DndContext>
                 </div>
               ) : (
-                sigPageTarget && renderPreviewCanvas(sigPageTarget, false)
+                sigPageTarget && (
+                  <div className="relative w-full h-full flex items-center justify-center overflow-hidden">
+                    <div 
+                      ref={rightSideSigRef}
+                      className="relative touch-none inline-flex items-center justify-center"
+                      onPointerDown={() => setOpenMenuSigId(null)}
+                      onPointerMove={handlePointerMoveSig}
+                      onPointerUp={handlePointerUpSig}
+                      onPointerLeave={handlePointerUpSig}
+                      style={{
+                         transform: `scale(${0.75})`,
+                         transition: 'transform 0.15s ease-out'
+                      }}
+                    >
+                       <div 
+                         className="relative flex items-center justify-center shadow-xl"
+                         style={{
+                           transform: `rotate(${sigPageTarget.rotation + (sigPageTarget.fineRotation || 0)}deg) scale(${activePanel === 'page-edit' ? sigPageTarget.scale || 1 : 1})`,
+                           transition: 'transform 0.15s ease-out'
+                         }}
+                       >
+                         <img 
+                           src={sigPageTarget.url} 
+                           className="block pointer-events-none bg-white w-auto h-auto object-contain" 
+                           style={{ 
+                             maxHeight: '75vh', 
+                             maxWidth: '80vw',
+                             filter: getFilterString(sigPageTarget)
+                           }}
+                           alt="Preview" 
+                           draggable={false}
+                         />
+                         
+                         <div className="absolute inset-0 pointer-events-none">
+                           {renderSignatureOverlay('right')}
+                         </div>
+                       </div>
+                    </div>
+
+                    {/* Watermark Overlay in Non-Fullscreen Preview */}
+                    {watermarkText && (
+                      <div className="absolute inset-0 pointer-events-none overflow-hidden z-30 flex items-center justify-center" style={{ opacity: watermarkOpacity / 100 }}>
+                         <div 
+                           className={`absolute font-bold text-slate-500 whitespace-nowrap opacity-50 ${
+                             watermarkPlacement === 'center' ? 'top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 -rotate-45 text-4xl sm:text-6xl' :
+                             watermarkPlacement === 'top-left' ? 'top-6 left-6 text-xl' :
+                             watermarkPlacement === 'top-right' ? 'top-6 right-6 text-xl' :
+                             watermarkPlacement === 'bottom-left' ? 'bottom-12 left-6 text-xl' :
+                             'bottom-12 right-6 text-xl'
+                           }`}
+                         >
+                           {watermarkText}
+                         </div>
+                      </div>
+                    )}
+                    
+                    {addPageNumbers && (
+                      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 text-slate-800 font-bold text-sm pointer-events-none">
+                        {previewPageIndex + 1} / {pages.length}
+                      </div>
+                    )}
+
+                    {/* Fixed Axis Lines - Rendered ONLY while straightening */}
+                    {activePanel === 'page-edit' && isStraightening && (
+                       <div className="absolute inset-0 pointer-events-none z-20 flex items-center justify-center mix-blend-difference overflow-hidden">
+                         <div className="w-full h-[1.5px] bg-amber-500 absolute top-1/2 -translate-y-1/2 opacity-70" />
+                         <div className="h-full w-[1.5px] bg-amber-500 absolute left-1/2 -translate-x-1/2 opacity-70" />
+                       </div>
+                    )}
+                  </div>
+                )
               )}
               {renderPaginationOverlay()}
             </>
@@ -2131,13 +2111,14 @@ export default function PdfEditor() {
       </div>
 
       {/* Fullscreen Editor / Universal Workspace Mode */}
-      {isFullscreen && pages.length > 0 && sigPageTarget && (
+      {fullScreenMode && pages.length > 0 && sigPageTarget && (
         <div className="fixed inset-0 z-[160] bg-slate-100 flex flex-col md:flex-row animate-in fade-in duration-200">
           
+          {/* Top Right Close Button (Red Highlighted) */}
           <button 
-            onClick={() => setIsFullscreen(false)} 
+            onClick={() => setFullScreenMode(null)} 
             className="fixed top-6 right-6 z-[300] bg-red-600 text-white p-3 rounded-full shadow-2xl hover:bg-red-500 hover:scale-105 ring-4 ring-red-500/30 transition-all border border-white/20 flex items-center justify-center group"
-            title="Close Full Screen"
+            title={fullScreenMode === 'preview' ? "Close Preview" : "Close Full Screen"}
           >
             <X className="w-5 h-5 group-hover:rotate-90 transition-transform" />
           </button>
@@ -2147,26 +2128,39 @@ export default function PdfEditor() {
             <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50 sticky top-0 z-10">
               <div className="flex items-center gap-3">
                 <h3 className="text-xs font-bold text-slate-800 uppercase tracking-widest flex items-center gap-2">
-                  <Settings2 className="w-4 h-4 text-[#6384A3]" /> Full Screen Studio
+                  {fullScreenMode === 'preview' ? <Eye className="w-4 h-4 text-[#6384A3]"/> : <Settings2 className="w-4 h-4 text-[#6384A3]" />} 
+                  {fullScreenMode === 'preview' ? 'Document Preview' : 'Full Screen Studio'}
                 </h3>
-                <button onClick={handleUndo} disabled={history.length === 0} className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-200 rounded transition-colors disabled:opacity-30 disabled:hover:bg-transparent" title="Undo Last Action">
-                  <Undo2 className="w-4 h-4" />
-                </button>
+                {fullScreenMode === 'edit' && (
+                  <button onClick={handleUndo} disabled={history.length === 0} className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-200 rounded transition-colors disabled:opacity-30 disabled:hover:bg-transparent" title="Undo Last Action">
+                    <Undo2 className="w-4 h-4" />
+                  </button>
+                )}
               </div>
             </div>
             <div className="p-4 space-y-4 overflow-visible flex-1">
-              {renderSidebarAccordions(true)}
+              {fullScreenMode === 'preview' ? (
+                renderAccordion('export', 'Format & Export', <Download className="w-4 h-4 text-[#6384A3]"/>, renderExportControls())
+              ) : (
+                renderSidebarAccordions(true)
+              )}
             </div>
             <div className="p-4 border-t border-slate-200 bg-slate-50 sticky bottom-0">
-              <button onClick={() => setIsFullscreen(false)} className="w-full py-3 bg-slate-800 hover:bg-black text-white font-bold rounded uppercase tracking-widest text-xs transition-colors shadow-sm">
-                Save & Close Studio
-              </button>
+              {fullScreenMode === 'preview' ? (
+                <button onClick={handleMainExport} disabled={isProcessing} className="w-full py-3 bg-[#6384A3] hover:bg-[#4f6a83] text-white font-bold rounded uppercase tracking-widest text-xs transition-colors shadow-sm flex items-center justify-center gap-2">
+                  <Download className="w-4 h-4" /> Export File
+                </button>
+              ) : (
+                <button onClick={() => setFullScreenMode(null)} className="w-full py-3 bg-slate-800 hover:bg-black text-white font-bold rounded uppercase tracking-widest text-xs transition-colors shadow-sm">
+                  Save & Close Studio
+                </button>
+              )}
             </div>
           </div>
           
           <div className="flex-1 relative touch-none select-none bg-slate-100 overflow-hidden flex flex-col">
              
-             {!showViewerGrid && (
+             {!showViewerGrid && fullScreenMode !== 'preview' && (
                <div className="absolute top-6 left-6 z-50 flex gap-3 pointer-events-auto">
                  <button 
                    onClick={(e) => { e.stopPropagation(); rotatePage(sigPageTarget.id) }} 
@@ -2204,16 +2198,108 @@ export default function PdfEditor() {
                      {pages.map((p, idx) => (
                        <div key={p.id} onClick={() => { setPreviewPageIndex(idx); setShowViewerGrid(false); }} className={`cursor-pointer border-2 rounded-lg overflow-hidden aspect-[3/4] relative transition-colors bg-slate-100 shadow-xl ${previewPageIndex === idx ? 'border-[#6384A3] ring-2 ring-[#6384A3]/50' : 'border-slate-300 hover:border-slate-400'}`}>
                          <img src={p.url} alt={`Thumb ${idx+1}`} className="w-full h-full object-contain bg-white" style={{ transform: `rotate(${p.rotation + p.fineRotation}deg)` }} />
-                         <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded">Page {idx + 1}</div>
+                         
+                         {/* Grid Watermarks */}
+                         {watermarkText && (
+                            <div className="absolute inset-0 pointer-events-none overflow-hidden z-20 flex" style={{ opacity: watermarkOpacity / 100 }}>
+                               <div 
+                                 className={`absolute font-bold text-slate-500 whitespace-nowrap opacity-50 ${
+                                   watermarkPlacement === 'center' ? 'top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 -rotate-45 text-xl' :
+                                   watermarkPlacement === 'top-left' ? 'top-2 left-2 text-[8px]' :
+                                   watermarkPlacement === 'top-right' ? 'top-2 right-2 text-[8px]' :
+                                   watermarkPlacement === 'bottom-left' ? 'bottom-6 left-2 text-[8px]' :
+                                   'bottom-6 right-2 text-[8px]'
+                                 }`}
+                               >
+                                 {watermarkText}
+                               </div>
+                            </div>
+                          )}
+
+                         <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded z-30">Page {idx + 1}</div>
                          {signatures && signatures.length > 0 && signatures.some(sig => shouldApplySignature(idx, sig.applyMode, sig.customPages)) && (
-                           <div className="absolute top-1 right-1 bg-[#6384A3] text-white text-[9px] px-1.5 py-0.5 rounded shadow">Signed</div>
+                           <div className="absolute top-1 right-1 bg-[#6384A3] text-white text-[9px] px-1.5 py-0.5 rounded shadow z-30">Signed</div>
                          )}
+                         {addPageNumbers && (
+                            <div className="absolute bottom-1 left-1/2 -translate-x-1/2 z-20 text-slate-800 font-bold text-[8px] pointer-events-none">
+                              {idx + 1} / {pages.length}
+                            </div>
+                          )}
                        </div>
                      ))}
                    </div>
                  </div>
                ) : (
-                 renderPreviewCanvas(sigPageTarget, true)
+                 <div className="relative w-full h-full flex items-center justify-center overflow-hidden">
+                   <div 
+                     ref={modalSigRef}
+                     className="relative touch-none inline-flex items-center justify-center"
+                     onPointerDown={() => setOpenMenuSigId(null)}
+                     onPointerMove={handlePointerMoveSig}
+                     onPointerUp={handlePointerUpSig}
+                     onPointerLeave={handlePointerUpSig}
+                     style={{
+                        transform: `scale(${sigZoom})`,
+                        transition: 'transform 0.15s ease-out'
+                     }}
+                   >
+                     {/* The Image Group Container */}
+                     <div 
+                       className="relative flex items-center justify-center shadow-xl"
+                       style={{
+                         transform: `rotate(${sigPageTarget.rotation + (sigPageTarget.fineRotation || 0)}deg) scale(${activePanel === 'page-edit' ? sigPageTarget.scale || 1 : 1})`,
+                         transition: 'transform 0.15s ease-out'
+                       }}
+                     >
+                       <img 
+                         src={sigPageTarget.url} 
+                         className="block pointer-events-none bg-white w-auto h-auto object-contain" 
+                         style={{ 
+                           maxHeight: '75vh', 
+                           maxWidth: '80vw',
+                           filter: getFilterString(sigPageTarget)
+                         }}
+                         alt="Preview" 
+                         draggable={false}
+                       />
+                       
+                       <div className="absolute inset-0 pointer-events-none">
+                         {renderSignatureOverlay('modal')}
+                       </div>
+                     </div>
+                   </div>
+
+                   {/* Watermark Overlay for Fullscreen */}
+                   {watermarkText && (
+                      <div className="absolute inset-0 pointer-events-none overflow-hidden z-30 flex items-center justify-center" style={{ opacity: watermarkOpacity / 100 }}>
+                         <div 
+                           className={`absolute font-bold text-slate-500 whitespace-nowrap opacity-50 ${
+                             watermarkPlacement === 'center' ? 'top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 -rotate-45 text-4xl sm:text-6xl' :
+                             watermarkPlacement === 'top-left' ? 'top-6 left-6 text-xl' :
+                             watermarkPlacement === 'top-right' ? 'top-6 right-6 text-xl' :
+                             watermarkPlacement === 'bottom-left' ? 'bottom-12 left-6 text-xl' :
+                             'bottom-12 right-6 text-xl'
+                           }`}
+                         >
+                           {watermarkText}
+                         </div>
+                      </div>
+                    )}
+                    
+                    {addPageNumbers && (
+                      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 text-slate-800 font-bold text-sm pointer-events-none">
+                        {previewPageIndex + 1} / {pages.length}
+                      </div>
+                    )}
+
+                   {/* Fixed Axis Lines - Rendered ONLY while straightening */}
+                   {activePanel === 'page-edit' && isStraightening && fullScreenMode !== 'preview' && (
+                      <div className="absolute inset-0 pointer-events-none z-20 flex items-center justify-center mix-blend-difference overflow-hidden">
+                        <div className="w-full h-[1.5px] bg-amber-500 absolute top-1/2 -translate-y-1/2 opacity-70" />
+                        <div className="h-full w-[1.5px] bg-amber-500 absolute left-1/2 -translate-x-1/2 opacity-70" />
+                      </div>
+                   )}
+                 </div>
                )}
              </div>
           </div>
