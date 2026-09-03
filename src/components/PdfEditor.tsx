@@ -1624,7 +1624,6 @@ export default function PdfEditor() {
           options={[
             { value: 'pdf', label: 'PDF Document (.pdf)' },
             { value: 'word', label: 'Word Document (.doc)' },
-            { value: 'excel', label: 'Excel Spreadsheet (.xls)' },
             { value: 'images', label: 'Image Archive (.zip)' },
           ]} 
         />
@@ -1934,10 +1933,6 @@ export default function PdfEditor() {
     }
   }
 
-  const exportAsExcel = async () => {
-    showToast('Excel export requires structured tabular data. Image-based PDFs cannot be exported directly to Excel without OCR.')
-  }
-
   const handleSplitPdf = async () => {
     if (!splitRanges.trim()) return alert("Please enter valid page ranges (e.g., 1-3, 5).")
     
@@ -1994,7 +1989,6 @@ export default function PdfEditor() {
     if (exportFormat === 'pdf') exportAsPdf()
     else if (exportFormat === 'images') exportAsImages()
     else if (exportFormat === 'word') exportAsWord()
-    else if (exportFormat === 'excel') exportAsExcel()
   }
 
   return (

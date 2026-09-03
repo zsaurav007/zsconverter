@@ -8,12 +8,14 @@ import CustomDropdown from '@/components/CustomDropdown'
 const FileUploader = dynamic(() => import('@/components/FileUploader'), { ssr: false })
 const PhotoEditor = dynamic(() => import('@/components/PhotoEditor'), { ssr: false })
 const PdfEditor = dynamic(() => import('@/components/PdfEditor'), { ssr: false })
+const PdfToExcel = dynamic(() => import('@/components/PdfToExcel'), { ssr: false }) // Added PDF to Excel
 const BatchProcessor = dynamic(() => import('@/components/BatchProcessor'), { ssr: false })
 const AiConverter = dynamic(() => import('@/components/AiConverter'), { ssr: false })
 const QrGenerator = dynamic(() => import('@/components/QrGenerator'), { ssr: false })
 const PaletteExtractor = dynamic(() => import('@/components/PaletteExtractor'), { ssr: false })
 
-type AppMode = 'image' | 'pdf' | 'batch' | 'ai' | 'qr' | 'palette'
+// Added 'pdfToExcel' to the valid app modes to prevent TS errors
+type AppMode = 'image' | 'pdf' | 'batch' | 'ai' | 'qr' | 'palette' | 'pdfToExcel'
 
 export default function Home() {
   const [appMode, setAppMode] = useState<AppMode>('image')
@@ -37,6 +39,7 @@ export default function Home() {
     { value: 'image', label: 'Single Image' },
     { value: 'batch', label: 'Batch Processor' },
     { value: 'pdf', label: 'PDF Tools' },
+    { value: 'pdfToExcel', label: 'PDF to Excel' }, // Added new nav option
     { value: 'ai', label: 'AI Converter' },
     { value: 'palette', label: 'Color Palette' },
     { value: 'qr', label: 'QR Code' }
@@ -98,6 +101,12 @@ export default function Home() {
                 PDF Tools
               </button>
               <button 
+                onClick={() => setAppMode('pdfToExcel')} 
+                className={`flex-shrink-0 px-4 py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'pdfToExcel' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                PDF to Excel
+              </button>
+              <button 
                 onClick={() => setAppMode('ai')} 
                 className={`flex-shrink-0 px-4 py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'ai' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
               >
@@ -139,6 +148,13 @@ export default function Home() {
         {appMode === 'pdf' && (
           <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
             <PdfEditor />
+          </div>
+        )}
+
+        {/* Added the new condition block for PdfToExcel */}
+        {appMode === 'pdfToExcel' && (
+          <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+            <PdfToExcel />
           </div>
         )}
 
