@@ -176,6 +176,7 @@ interface SortableItemProps {
   addPageNumbers: boolean
   totalPages: number
   isSelected: boolean
+  isMultiSelectMode: boolean
   onToggleSelect: (id: string, selected: boolean) => void
   onRemove: (id: string) => void
   onRotateCw: (id: string) => void
@@ -183,7 +184,7 @@ interface SortableItemProps {
   onView: (id: string) => void
 }
 
-function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brightness, contrast, saturation, hue, sepia, grayscale, sharpen, watermarkText, watermarkPlacement, watermarkOpacity, addPageNumbers, totalPages, isSelected, onToggleSelect, onRemove, onRotateCw, onRotateCcw, onView }: SortableItemProps) {
+function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brightness, contrast, saturation, hue, sepia, grayscale, sharpen, watermarkText, watermarkPlacement, watermarkOpacity, addPageNumbers, totalPages, isSelected, isMultiSelectMode, onToggleSelect, onRemove, onRotateCw, onRotateCcw, onView }: SortableItemProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
   
   const style = {
@@ -203,21 +204,29 @@ function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brigh
       style={style} 
       {...attributes} 
       {...listeners} 
-      onClick={() => onView(id)}
-      className={`relative rounded-lg overflow-hidden border ${isDragging ? 'border-[#6384A3] shadow-2xl scale-105' : isSelected ? 'border-[#6384A3] ring-2 ring-[#6384A3]/30' : 'border-slate-200'} aspect-[3/4] cursor-pointer hover:shadow-md transition-all bg-slate-100 flex items-center justify-center group touch-none`}
+      onClick={() => {
+        if (isMultiSelectMode) {
+          onToggleSelect(id, !isSelected)
+        } else {
+          onView(id)
+        }
+      }}
+      className={`relative rounded-lg overflow-hidden border ${isDragging ? 'border-[#6384A3] shadow-2xl scale-105' : isSelected ? 'border-[#6384A3] ring-2 ring-[#6384A3]/50' : 'border-slate-200'} aspect-[3/4] cursor-pointer hover:shadow-md transition-all bg-slate-100 flex items-center justify-center group touch-none`}
     >
-      <div 
-        className="absolute top-2 left-2 z-30 bg-white/90 rounded shadow-sm flex items-center justify-center p-1"
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <input
-          type="checkbox"
-          checked={isSelected}
-          onChange={(e) => onToggleSelect(id, e.target.checked)}
-          className="w-4 h-4 accent-[#6384A3] cursor-pointer"
-        />
-      </div>
+      {isMultiSelectMode && (
+        <div 
+          className="absolute top-2 left-2 z-30 bg-white/90 rounded shadow-sm flex items-center justify-center p-1"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={(e) => onToggleSelect(id, e.target.checked)}
+            className="w-4 h-4 accent-[#6384A3] cursor-pointer"
+          />
+        </div>
+      )}
 
       <div className="w-full h-full flex items-center justify-center overflow-hidden bg-slate-100 relative">
         <div style={{ transform: `rotate(${rotation + fineRotation}deg) scale(${imageScale * scale})`, transition: 'transform 0.15s ease', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%' }}>
@@ -332,6 +341,7 @@ type FullScreenMode = 'edit' | 'preview' | null;
 export default function PdfEditor() {
   const [pages, setPages] = useState<PageItem[]>([])
   const [selectedPages, setSelectedPages] = useState<string[]>([])
+  const [isMultiSelectMode, setIsMultiSelectMode] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
   const [loadingText, setLoadingText] = useState('')
   const [toast, setToast] = useState<{message: string, id: number} | null>(null)
@@ -664,7 +674,7 @@ export default function PdfEditor() {
 
       saveHistory();
       setPages(prev => [...prev, ...newPages])
-      setShowViewerGrid(true) // Ensure it defaults to grid after drop
+      setShowViewerGrid(true) 
       setUnlockPassword('')
       showToast('Files loaded successfully')
     } catch (error) {
@@ -711,6 +721,15 @@ export default function PdfEditor() {
     showToast(`Rotated ${selectedPages.length} pages`);
   }
 
+  const deleteSelected = () => {
+    if (selectedPages.length === 0) return;
+    saveHistory();
+    setPages(items => items.filter(item => !selectedPages.includes(item.id)));
+    setSelectedPages([]);
+    setIsMultiSelectMode(false);
+    showToast(`Deleted selected pages`);
+  }
+
   const removePage = (idToRemove: string) => {
     saveHistory();
     setPages(items => items.filter(item => item.id !== idToRemove))
@@ -742,6 +761,7 @@ export default function PdfEditor() {
     setSignatures([])
     setActiveSigId(null)
     setSelectedPages([])
+    setIsMultiSelectMode(false)
     setShowViewerGrid(true)
     showToast('All pages & settings cleared')
   }
@@ -1915,62 +1935,7 @@ export default function PdfEditor() {
   }
 
   const exportAsExcel = async () => {
-    setIsProcessing(true)
-    setLoadingText('Building Excel Spreadsheet...')
-    await new Promise(r => setTimeout(r, 50))
-    try {
-      let htmlContent = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
-      <head>
-      <meta charset="utf-8">
-      <!--[if gte mso 9]><xml>
-      <x:ExcelWorkbook>
-        <x:ExcelWorksheets>
-          <x:ExcelWorksheet>
-            <x:Name>Sheet1</x:Name>
-            <x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions>
-          </x:ExcelWorksheet>
-        </x:ExcelWorksheets>
-      </x:ExcelWorkbook>
-      </xml><![endif]-->
-      </head><body><table style="border-collapse: collapse;">`
-      
-      for (let i = 0; i < pages.length; i++) {
-        const canvas = await renderPageToCanvas(pages[i], i, false)
-        if(!canvas) continue
-        
-        // Scale down to prevent huge Excel files that freeze or crash the app
-        const MAX_WIDTH = 800;
-        let scale = 1;
-        if (canvas.width > MAX_WIDTH) {
-            scale = MAX_WIDTH / canvas.width;
-        }
-        
-        const xlCanvas = document.createElement('canvas');
-        xlCanvas.width = canvas.width * scale;
-        xlCanvas.height = canvas.height * scale;
-        const ctx = xlCanvas.getContext('2d');
-        if (ctx) {
-            ctx.drawImage(canvas, 0, 0, xlCanvas.width, xlCanvas.height);
-        }
-        
-        const b64 = xlCanvas.toDataURL('image/jpeg', 0.6) // Use lower quality for Excel compatibility
-        htmlContent += `<tr><td style="padding: 10px;"><img src="${b64}" width="${xlCanvas.width}" height="${xlCanvas.height}" /></td></tr>`
-      }
-      
-      htmlContent += `</table></body></html>`
-      
-      const blob = new Blob(['\ufeff', htmlContent], { type: 'application/vnd.ms-excel' })
-      const link = document.createElement('a')
-      link.href = URL.createObjectURL(blob)
-      link.download = `${originalDocName}_zs_converter.xls`
-      link.click()
-      showToast('Excel document exported')
-    } catch(e) {
-      alert("Excel export failed.")
-    } finally {
-      setIsProcessing(false)
-      setLoadingText('')
-    }
+    showToast('Excel export requires structured tabular data. Image-based PDFs cannot be exported directly to Excel without OCR.')
   }
 
   const handleSplitPdf = async () => {
@@ -2150,21 +2115,37 @@ export default function PdfEditor() {
                       <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">
                         {pages.length} {pages.length === 1 ? 'Page' : 'Pages'} Loaded
                       </span>
-                      {pages.length > 0 && (
-                        <label className="flex items-center gap-1.5 cursor-pointer text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                      {!isMultiSelectMode && pages.length > 0 && (
+                        <button onClick={() => setIsMultiSelectMode(true)} className="text-[10px] font-bold text-[#6384A3] hover:text-[#4f6a83] uppercase tracking-widest transition-colors flex items-center gap-1 bg-[#6384A3]/10 px-2 py-1 rounded">
+                          Select Multiple
+                        </button>
+                      )}
+                      {isMultiSelectMode && pages.length > 0 && (
+                        <label className="flex items-center gap-1.5 cursor-pointer text-[10px] font-bold text-slate-500 uppercase tracking-widest bg-slate-200 px-2 py-1 rounded">
                           <input type="checkbox" checked={selectedPages.length === pages.length && pages.length > 0} onChange={selectAllPages} className="w-3.5 h-3.5 accent-[#6384A3]" />
                           Select All
                         </label>
                       )}
                     </div>
                     <div className="flex items-center gap-3">
-                      {selectedPages.length > 0 && (
+                      {isMultiSelectMode && (
                         <div className="flex items-center gap-2 border-r border-slate-300 pr-3 mr-1">
-                          <button onClick={() => rotateSelected('ccw')} className="text-[10px] font-bold text-slate-600 hover:text-black uppercase tracking-widest flex items-center gap-1 transition-colors">
-                            <RotateCcw className="w-3.5 h-3.5" /> Rotate CCW
-                          </button>
-                          <button onClick={() => rotateSelected('cw')} className="text-[10px] font-bold text-slate-600 hover:text-black uppercase tracking-widest flex items-center gap-1 transition-colors">
-                            <RotateCw className="w-3.5 h-3.5" /> Rotate CW
+                          <span className="text-[10px] font-bold text-slate-400 mr-2">{selectedPages.length} Selected</span>
+                          {selectedPages.length > 0 && (
+                            <>
+                              <button onClick={() => rotateSelected('ccw')} className="text-[10px] font-bold text-slate-600 hover:text-black uppercase tracking-widest flex items-center gap-1 transition-colors" title="Rotate CCW">
+                                <RotateCcw className="w-3.5 h-3.5" />
+                              </button>
+                              <button onClick={() => rotateSelected('cw')} className="text-[10px] font-bold text-slate-600 hover:text-black uppercase tracking-widest flex items-center gap-1 transition-colors" title="Rotate CW">
+                                <RotateCw className="w-3.5 h-3.5" />
+                              </button>
+                              <button onClick={deleteSelected} className="text-[10px] font-bold text-red-500 hover:text-red-700 uppercase tracking-widest flex items-center gap-1 transition-colors" title="Delete Selected">
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </>
+                          )}
+                          <button onClick={() => { setIsMultiSelectMode(false); setSelectedPages([]); }} className="text-[10px] font-bold text-slate-500 hover:text-slate-800 uppercase tracking-widest transition-colors ml-2">
+                            Cancel
                           </button>
                         </div>
                       )}
@@ -2198,6 +2179,7 @@ export default function PdfEditor() {
                             addPageNumbers={addPageNumbers}
                             totalPages={pages.length}
                             isSelected={selectedPages.includes(page.id)}
+                            isMultiSelectMode={isMultiSelectMode}
                             onToggleSelect={(id, selected) => {
                               setSelectedPages(prev => selected ? [...prev, id] : prev.filter(p => p !== id));
                             }}
