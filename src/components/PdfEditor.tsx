@@ -8,7 +8,7 @@ import { removeBackground, Config } from '@imgly/background-removal'
 import { DndContext, closestCenter, TouchSensor, MouseSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, useSortable, rectSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Settings2, Trash2, Eye, Download, RotateCw, Lock, Unlock, FileText, Type, SlidersHorizontal, X, FileImage, ShieldCheck, Layers, Scissors, Wand2, Hash, Edit3, PenTool, Image as ImageIcon, Sparkles, Move, ChevronLeft, ChevronRight, LayoutGrid, ZoomIn, ZoomOut, Plus, Trash, MoreVertical, CheckCircle2, Undo2 } from 'lucide-react'
+import { Settings2, Trash2, Eye, Download, RotateCw, RotateCcw, Lock, Unlock, FileText, Type, SlidersHorizontal, X, FileImage, ShieldCheck, Layers, Scissors, Wand2, Hash, Edit3, PenTool, Image as ImageIcon, Sparkles, Move, ChevronLeft, ChevronRight, LayoutGrid, ZoomIn, ZoomOut, Plus, Trash, MoreVertical, CheckCircle2, Undo2 } from 'lucide-react'
 import CustomDropdown from './CustomDropdown'
 
 // --- HELPER FUNCTIONS ---
@@ -57,13 +57,11 @@ const processDocumentTextExtraction = async (imageUrl: string): Promise<string> 
   const width = canvas.width;
   const height = canvas.height;
 
-  // 1. Grayscale luminance calculation
   const gray = new Float32Array(width * height);
   for (let i = 0; i < data.length; i += 4) {
     gray[i / 4] = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
   }
 
-  // 2. Fast Integral Image for Adaptive Local Thresholding
   const intImg = new Float64Array(width * height);
   const intSqImg = new Float64Array(width * height);
 
@@ -81,7 +79,6 @@ const processDocumentTextExtraction = async (imageUrl: string): Promise<string> 
     }
   }
 
-  // 3. Sauvola Adaptive Thresholding
   const windowSize = Math.max(15, Math.floor(width / 25)); 
   const k = 0.3; 
   const R = 128; 
@@ -113,14 +110,13 @@ const processDocumentTextExtraction = async (imageUrl: string): Promise<string> 
       const idx = (y * width + x) * 4;
       const currentGray = gray[y * width + x];
 
-      // Deep clean logic: Darker than threshold means it's text.
       if (currentGray < threshold && currentGray < 180) {
-        data[idx] = 0;     // Force Pure Black
+        data[idx] = 0;
         data[idx + 1] = 0;
         data[idx + 2] = 0;
         data[idx + 3] = 255;
       } else {
-        data[idx + 3] = 0; // Completely transparent background
+        data[idx + 3] = 0;
       }
     }
   }
@@ -179,12 +175,15 @@ interface SortableItemProps {
   watermarkOpacity: number
   addPageNumbers: boolean
   totalPages: number
+  isSelected: boolean
+  onToggleSelect: (id: string, selected: boolean) => void
   onRemove: (id: string) => void
-  onRotate: (id: string) => void
+  onRotateCw: (id: string) => void
+  onRotateCcw: (id: string) => void
   onView: (id: string) => void
 }
 
-function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brightness, contrast, saturation, hue, sepia, grayscale, sharpen, watermarkText, watermarkPlacement, watermarkOpacity, addPageNumbers, totalPages, onRemove, onRotate, onView }: SortableItemProps) {
+function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brightness, contrast, saturation, hue, sepia, grayscale, sharpen, watermarkText, watermarkPlacement, watermarkOpacity, addPageNumbers, totalPages, isSelected, onToggleSelect, onRemove, onRotateCw, onRotateCcw, onView }: SortableItemProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
   
   const style = {
@@ -205,8 +204,21 @@ function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brigh
       {...attributes} 
       {...listeners} 
       onClick={() => onView(id)}
-      className={`relative rounded-lg overflow-hidden border ${isDragging ? 'border-[#6384A3] shadow-2xl scale-105' : 'border-slate-200'} aspect-[3/4] cursor-pointer hover:shadow-md transition-all bg-slate-100 flex items-center justify-center group touch-none`}
+      className={`relative rounded-lg overflow-hidden border ${isDragging ? 'border-[#6384A3] shadow-2xl scale-105' : isSelected ? 'border-[#6384A3] ring-2 ring-[#6384A3]/30' : 'border-slate-200'} aspect-[3/4] cursor-pointer hover:shadow-md transition-all bg-slate-100 flex items-center justify-center group touch-none`}
     >
+      <div 
+        className="absolute top-2 left-2 z-30 bg-white/90 rounded shadow-sm flex items-center justify-center p-1"
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <input
+          type="checkbox"
+          checked={isSelected}
+          onChange={(e) => onToggleSelect(id, e.target.checked)}
+          className="w-4 h-4 accent-[#6384A3] cursor-pointer"
+        />
+      </div>
+
       <div className="w-full h-full flex items-center justify-center overflow-hidden bg-slate-100 relative">
         <div style={{ transform: `rotate(${rotation + fineRotation}deg) scale(${imageScale * scale})`, transition: 'transform 0.15s ease', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%' }}>
           <img 
@@ -241,20 +253,30 @@ function SortablePageItem({ id, url, index, rotation, fineRotation, scale, brigh
       </div>
       
       {/* Fixed Tools in Grid */}
-      <div className="absolute top-2 right-2 flex flex-col gap-2 opacity-100 z-30">
+      <div className="absolute top-2 right-2 flex flex-col gap-1.5 opacity-100 z-30">
         <button 
-          onPointerDown={(e) => { e.stopPropagation(); onRemove(id) }}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onRemove(id) }}
           className="bg-red-500/90 hover:bg-red-600 text-white rounded-full w-8 h-8 lg:w-6 lg:h-6 flex items-center justify-center shadow-md transition-colors"
           title="Delete Page"
         >
           <X className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
         </button>
         <button 
-          onPointerDown={(e) => { e.stopPropagation(); onRotate(id) }}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onRotateCw(id) }}
           className="bg-slate-800/90 hover:bg-black text-white rounded-full w-8 h-8 lg:w-6 lg:h-6 flex items-center justify-center shadow-md transition-colors"
-          title="Rotate 90°"
+          title="Rotate CW 90°"
         >
           <RotateCw className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
+        </button>
+        <button 
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onRotateCcw(id) }}
+          className="bg-slate-800/90 hover:bg-black text-white rounded-full w-8 h-8 lg:w-6 lg:h-6 flex items-center justify-center shadow-md transition-colors"
+          title="Rotate CCW 90°"
+        >
+          <RotateCcw className="w-4 h-4 lg:w-3.5 lg:h-3.5" />
         </button>
       </div>
 
@@ -309,6 +331,7 @@ type FullScreenMode = 'edit' | 'preview' | null;
 
 export default function PdfEditor() {
   const [pages, setPages] = useState<PageItem[]>([])
+  const [selectedPages, setSelectedPages] = useState<string[]>([])
   const [isProcessing, setIsProcessing] = useState(false)
   const [loadingText, setLoadingText] = useState('')
   const [toast, setToast] = useState<{message: string, id: number} | null>(null)
@@ -322,7 +345,7 @@ export default function PdfEditor() {
   const [activePanel, setActivePanel] = useState<PanelId>('export')
   const [fullScreenMode, setFullScreenMode] = useState<FullScreenMode>(null)
   const panelRefs = useRef<Record<string, HTMLDivElement | null>>({})
-  const [showViewerGrid, setShowViewerGrid] = useState(false)
+  const [showViewerGrid, setShowViewerGrid] = useState(true) // Open Grid By Default
   const [isStraightening, setIsStraightening] = useState(false)
 
   useEffect(() => {
@@ -369,7 +392,7 @@ export default function PdfEditor() {
   const [resizingState, setResizingState] = useState<{ startX: number, startY: number, startScale: number, corner: string, sigId: string } | null>(null)
   
   const [previewPageIndex, setPreviewPageIndex] = useState(0)
-  const [sigZoom, setSigZoom] = useState(0.75) // Default zoom set to 75%
+  const [sigZoom, setSigZoom] = useState(0.75)
 
   const rightSideSigRef = useRef<HTMLDivElement>(null)
   const modalSigRef = useRef<HTMLDivElement>(null)
@@ -641,6 +664,7 @@ export default function PdfEditor() {
 
       saveHistory();
       setPages(prev => [...prev, ...newPages])
+      setShowViewerGrid(true) // Ensure it defaults to grid after drop
       setUnlockPassword('')
       showToast('Files loaded successfully')
     } catch (error) {
@@ -669,16 +693,41 @@ export default function PdfEditor() {
     }
   }
 
+  // Batch / Single Page Interactions
+  const selectAllPages = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.checked) setSelectedPages(pages.map(p => p.id));
+    else setSelectedPages([]);
+  }
+
+  const rotateSelected = (direction: 'cw' | 'ccw') => {
+    if (selectedPages.length === 0) return;
+    saveHistory();
+    const angle = direction === 'cw' ? 90 : -90;
+    setPages(items => items.map(item =>
+      selectedPages.includes(item.id)
+      ? { ...item, rotation: (item.rotation + angle + 360) % 360 }
+      : item
+    ));
+    showToast(`Rotated ${selectedPages.length} pages`);
+  }
+
   const removePage = (idToRemove: string) => {
     saveHistory();
     setPages(items => items.filter(item => item.id !== idToRemove))
+    setSelectedPages(prev => prev.filter(id => id !== idToRemove))
     showToast('Page removed')
   }
 
-  const rotatePage = (idToRotate: string) => {
+  const rotatePageCw = (idToRotate: string) => {
     saveHistory();
     setPages(items => items.map(item => item.id === idToRotate ? { ...item, rotation: (item.rotation + 90) % 360 } : item))
-    showToast('Page rotated')
+    showToast('Page rotated CW')
+  }
+
+  const rotatePageCcw = (idToRotate: string) => {
+    saveHistory();
+    setPages(items => items.map(item => item.id === idToRotate ? { ...item, rotation: (item.rotation - 90 + 360) % 360 } : item))
+    showToast('Page rotated CCW')
   }
 
   const updatePageAttributes = (id: string, updates: Partial<PageItem>) => {
@@ -692,17 +741,9 @@ export default function PdfEditor() {
     setPreviewPageIndex(0)
     setSignatures([])
     setActiveSigId(null)
+    setSelectedPages([])
+    setShowViewerGrid(true)
     showToast('All pages & settings cleared')
-  }
-
-  const handleEditPage = (id: string) => {
-    const idx = pages.findIndex(p => p.id === id);
-    if (idx !== -1) {
-      setPreviewPageIndex(idx);
-      setActivePanel('page-edit');
-      setFullScreenMode('edit');
-      setShowViewerGrid(false);
-    }
   }
 
   const handlePreview = async () => {
@@ -1563,6 +1604,7 @@ export default function PdfEditor() {
           options={[
             { value: 'pdf', label: 'PDF Document (.pdf)' },
             { value: 'word', label: 'Word Document (.doc)' },
+            { value: 'excel', label: 'Excel Spreadsheet (.xls)' },
             { value: 'images', label: 'Image Archive (.zip)' },
           ]} 
         />
@@ -1756,7 +1798,7 @@ export default function PdfEditor() {
     return canvas;
   }
 
-  // --- PDF GENERATION LOGIC ---
+  // --- EXPORT LOGIC ---
   const generatePdfBlob = async (pagesToExport: PageItem[] = pages): Promise<Blob | null> => {
     if (pagesToExport.length === 0) return null
 
@@ -1786,7 +1828,6 @@ export default function PdfEditor() {
     return pdf ? pdf.output('blob') : null
   }
 
-  // --- NEW: MISSING EXPORT FUNCTIONS ADDED HERE ---
   const exportAsPdf = async () => {
     setIsProcessing(true)
     setLoadingText('Generating PDF...')
@@ -1821,7 +1862,6 @@ export default function PdfEditor() {
         if (!canvas) continue
 
         const dataUrl = canvas.toDataURL('image/jpeg', 0.92)
-        // Extract base64 part
         const base64Data = dataUrl.split(',')[1]
         zip.file(`${originalDocName}_page_${i + 1}.jpg`, base64Data, { base64: true })
       }
@@ -1868,6 +1908,65 @@ export default function PdfEditor() {
       showToast('Word document exported')
     } catch(e) {
       alert("Word export failed.")
+    } finally {
+      setIsProcessing(false)
+      setLoadingText('')
+    }
+  }
+
+  const exportAsExcel = async () => {
+    setIsProcessing(true)
+    setLoadingText('Building Excel Spreadsheet...')
+    await new Promise(r => setTimeout(r, 50))
+    try {
+      let htmlContent = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+      <head>
+      <meta charset="utf-8">
+      <!--[if gte mso 9]><xml>
+      <x:ExcelWorkbook>
+        <x:ExcelWorksheets>
+          <x:ExcelWorksheet>
+            <x:Name>Sheet1</x:Name>
+            <x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions>
+          </x:ExcelWorksheet>
+        </x:ExcelWorksheets>
+      </x:ExcelWorkbook>
+      </xml><![endif]-->
+      </head><body><table style="border-collapse: collapse;">`
+      
+      for (let i = 0; i < pages.length; i++) {
+        const canvas = await renderPageToCanvas(pages[i], i, false)
+        if(!canvas) continue
+        
+        // Scale down to prevent huge Excel files that freeze or crash the app
+        const MAX_WIDTH = 800;
+        let scale = 1;
+        if (canvas.width > MAX_WIDTH) {
+            scale = MAX_WIDTH / canvas.width;
+        }
+        
+        const xlCanvas = document.createElement('canvas');
+        xlCanvas.width = canvas.width * scale;
+        xlCanvas.height = canvas.height * scale;
+        const ctx = xlCanvas.getContext('2d');
+        if (ctx) {
+            ctx.drawImage(canvas, 0, 0, xlCanvas.width, xlCanvas.height);
+        }
+        
+        const b64 = xlCanvas.toDataURL('image/jpeg', 0.6) // Use lower quality for Excel compatibility
+        htmlContent += `<tr><td style="padding: 10px;"><img src="${b64}" width="${xlCanvas.width}" height="${xlCanvas.height}" /></td></tr>`
+      }
+      
+      htmlContent += `</table></body></html>`
+      
+      const blob = new Blob(['\ufeff', htmlContent], { type: 'application/vnd.ms-excel' })
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(blob)
+      link.download = `${originalDocName}_zs_converter.xls`
+      link.click()
+      showToast('Excel document exported')
+    } catch(e) {
+      alert("Excel export failed.")
     } finally {
       setIsProcessing(false)
       setLoadingText('')
@@ -1927,13 +2026,10 @@ export default function PdfEditor() {
   }
 
   const handleMainExport = () => {
-    if (exportFormat === 'pdf') {
-      exportAsPdf()
-    } else if (exportFormat === 'images') {
-      exportAsImages()
-    } else if (exportFormat === 'word') {
-      exportAsWord()
-    }
+    if (exportFormat === 'pdf') exportAsPdf()
+    else if (exportFormat === 'images') exportAsImages()
+    else if (exportFormat === 'word') exportAsWord()
+    else if (exportFormat === 'excel') exportAsExcel()
   }
 
   return (
@@ -2008,9 +2104,16 @@ export default function PdfEditor() {
               {!showViewerGrid && sigPageTarget && (
                 <div className="absolute top-4 left-4 z-50 flex gap-2 pointer-events-auto opacity-100 transition-opacity">
                   <button 
-                    onClick={(e) => { e.stopPropagation(); rotatePage(sigPageTarget.id) }} 
+                    onClick={(e) => { e.stopPropagation(); rotatePageCcw(sigPageTarget.id) }} 
                     className="bg-slate-800 text-white p-2.5 rounded-full shadow-lg hover:bg-black transition-transform hover:scale-105"
-                    title="Rotate 90°"
+                    title="Rotate CCW 90°"
+                  >
+                    <RotateCcw className="w-4 h-4"/>
+                  </button>
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); rotatePageCw(sigPageTarget.id) }} 
+                    className="bg-slate-800 text-white p-2.5 rounded-full shadow-lg hover:bg-black transition-transform hover:scale-105"
+                    title="Rotate CW 90°"
                   >
                     <RotateCw className="w-4 h-4"/>
                   </button>
@@ -2043,12 +2146,32 @@ export default function PdfEditor() {
               {showViewerGrid ? (
                 <div className="absolute inset-0 z-40 bg-slate-100 overflow-y-auto px-6 py-20 custom-scrollbar">
                   <div className="flex justify-between items-center mb-6 border-b border-slate-200 pb-2">
-                    <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">
-                      {pages.length} {pages.length === 1 ? 'Page' : 'Pages'} Loaded
-                    </span>
-                    <button onClick={clearAll} className="text-[10px] font-bold text-red-500 hover:text-red-700 uppercase tracking-widest transition-colors flex items-center gap-1">
-                      <Trash2 className="w-3 h-3" /> Clear All
-                    </button>
+                    <div className="flex items-center gap-4">
+                      <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">
+                        {pages.length} {pages.length === 1 ? 'Page' : 'Pages'} Loaded
+                      </span>
+                      {pages.length > 0 && (
+                        <label className="flex items-center gap-1.5 cursor-pointer text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                          <input type="checkbox" checked={selectedPages.length === pages.length && pages.length > 0} onChange={selectAllPages} className="w-3.5 h-3.5 accent-[#6384A3]" />
+                          Select All
+                        </label>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {selectedPages.length > 0 && (
+                        <div className="flex items-center gap-2 border-r border-slate-300 pr-3 mr-1">
+                          <button onClick={() => rotateSelected('ccw')} className="text-[10px] font-bold text-slate-600 hover:text-black uppercase tracking-widest flex items-center gap-1 transition-colors">
+                            <RotateCcw className="w-3.5 h-3.5" /> Rotate CCW
+                          </button>
+                          <button onClick={() => rotateSelected('cw')} className="text-[10px] font-bold text-slate-600 hover:text-black uppercase tracking-widest flex items-center gap-1 transition-colors">
+                            <RotateCw className="w-3.5 h-3.5" /> Rotate CW
+                          </button>
+                        </div>
+                      )}
+                      <button onClick={clearAll} className="text-[10px] font-bold text-red-500 hover:text-red-700 uppercase tracking-widest transition-colors flex items-center gap-1">
+                        <Trash2 className="w-3 h-3" /> Clear All
+                      </button>
+                    </div>
                   </div>
                   <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
                     <SortableContext items={pages.map(p => p.id)} strategy={rectSortingStrategy}>
@@ -2074,8 +2197,13 @@ export default function PdfEditor() {
                             watermarkOpacity={watermarkOpacity}
                             addPageNumbers={addPageNumbers}
                             totalPages={pages.length}
+                            isSelected={selectedPages.includes(page.id)}
+                            onToggleSelect={(id, selected) => {
+                              setSelectedPages(prev => selected ? [...prev, id] : prev.filter(p => p !== id));
+                            }}
                             onRemove={removePage} 
-                            onRotate={rotatePage}
+                            onRotateCw={rotatePageCw}
+                            onRotateCcw={rotatePageCcw}
                             onView={(id) => {
                               const idx = pages.findIndex(p => p.id === id);
                               if(idx !== -1) {
@@ -2227,9 +2355,16 @@ export default function PdfEditor() {
              {!showViewerGrid && fullScreenMode !== 'preview' && (
                <div className="absolute top-6 left-6 z-50 flex gap-3 pointer-events-auto">
                  <button 
-                   onClick={(e) => { e.stopPropagation(); rotatePage(sigPageTarget.id) }} 
+                   onClick={(e) => { e.stopPropagation(); rotatePageCcw(sigPageTarget.id) }} 
                    className="bg-slate-800 text-white p-3 rounded-full shadow-lg hover:bg-black transition-transform hover:scale-105"
-                   title="Rotate 90°"
+                   title="Rotate CCW 90°"
+                 >
+                   <RotateCcw className="w-5 h-5"/>
+                 </button>
+                 <button 
+                   onClick={(e) => { e.stopPropagation(); rotatePageCw(sigPageTarget.id) }} 
+                   className="bg-slate-800 text-white p-3 rounded-full shadow-lg hover:bg-black transition-transform hover:scale-105"
+                   title="Rotate CW 90°"
                  >
                    <RotateCw className="w-5 h-5"/>
                  </button>
