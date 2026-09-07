@@ -816,9 +816,9 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
                     onChange={setSelectedModel} 
                     direction="down"
                     options={[
-                      { value: 'briaai/RMBG-1.4', label: 'Pro AI (Best for Objects & Products)' },
-                      { value: 'isnet_fp16', label: 'Standard AI (Best for People & Faces)' },
-                      { value: 'isnet', label: 'Maximum Detail AI (Best for Hair & Edges)' }
+                      { value: 'briaai/RMBG-1.4', label: 'Objects' },
+                      { value: 'isnet_fp16', label: 'People' },
+                      { value: 'isnet', label: 'Maximum Detail' }
                     ]}
                   />
                   <button onClick={handleRemoveBg} disabled={isRemovingBg} className="w-full py-2.5 mt-2 bg-[#6384A3] text-white text-[10px] font-bold uppercase tracking-widest rounded hover:bg-[#4f6a83] disabled:opacity-50 flex justify-center items-center gap-2">

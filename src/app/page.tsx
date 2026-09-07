@@ -8,13 +8,12 @@ import CustomDropdown from '@/components/CustomDropdown'
 const FileUploader = dynamic(() => import('@/components/FileUploader'), { ssr: false })
 const PhotoEditor = dynamic(() => import('@/components/PhotoEditor'), { ssr: false })
 const PdfEditor = dynamic(() => import('@/components/PdfEditor'), { ssr: false })
-const PdfToExcel = dynamic(() => import('@/components/PdfToExcel'), { ssr: false }) // Added PDF to Excel
+const PdfToExcel = dynamic(() => import('@/components/PdfToExcel'), { ssr: false })
 const BatchProcessor = dynamic(() => import('@/components/BatchProcessor'), { ssr: false })
 const AiConverter = dynamic(() => import('@/components/AiConverter'), { ssr: false })
 const QrGenerator = dynamic(() => import('@/components/QrGenerator'), { ssr: false })
 const PaletteExtractor = dynamic(() => import('@/components/PaletteExtractor'), { ssr: false })
 
-// Added 'pdfToExcel' to the valid app modes to prevent TS errors
 type AppMode = 'image' | 'pdf' | 'batch' | 'ai' | 'qr' | 'palette' | 'pdfToExcel'
 
 export default function Home() {
@@ -39,7 +38,7 @@ export default function Home() {
     { value: 'image', label: 'Single Image' },
     { value: 'batch', label: 'Batch Processor' },
     { value: 'pdf', label: 'PDF Tools' },
-    { value: 'pdfToExcel', label: 'PDF to Excel' }, // Added new nav option
+    { value: 'pdfToExcel', label: 'PDF to Excel' },
     { value: 'ai', label: 'AI Converter' },
     { value: 'palette', label: 'Color Palette' },
     { value: 'qr', label: 'QR Code' }
@@ -151,7 +150,6 @@ export default function Home() {
           </div>
         )}
 
-        {/* Added the new condition block for PdfToExcel */}
         {appMode === 'pdfToExcel' && (
           <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
             <PdfToExcel />
