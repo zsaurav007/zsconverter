@@ -166,7 +166,7 @@ const getFilterString = (page: PageItem) => {
 }
 
 // --- SORTABLE GRID ITEM (FILES - SLIM) ---
-function SortableFileBlock({ block, index }: { block: FileBlock, index: number }) {
+function SortableFileBlock({ block, index, onRemoveFile }: { block: FileBlock, index: number, onRemoveFile: (id: string) => void }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: block.id });
   const style = { transform: CSS.Transform.toString(transform), transition, zIndex: isDragging ? 50 : 1 };
 
@@ -186,8 +186,15 @@ function SortableFileBlock({ block, index }: { block: FileBlock, index: number }
           {block.pageIds.length} {block.pageIds.length === 1 ? 'pg' : 'pgs'}
         </span>
       </div>
-      <div className="text-slate-300 flex-shrink-0">
-        <Layers className="w-3.5 h-3.5" />
+      <div className="flex items-center gap-1.5 flex-shrink-0">
+        <button 
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onRemoveFile(block.fileId); }}
+          className="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors z-10 relative cursor-pointer"
+          title="Remove entire file"
+        >
+          <Trash2 className="w-3.5 h-3.5 pointer-events-none" />
+        </button>
       </div>
     </div>
   );
@@ -519,6 +526,21 @@ export default function PdfEditor() {
     showToast('All pages & settings cleared')
   }, [saveHistory, showToast]);
 
+  const removeFile = useCallback((fileId: string) => {
+    saveHistory();
+    setPages(prevPages => {
+      const remainingPages = prevPages.filter(p => p.fileId !== fileId);
+      if (remainingPages.length === 0) {
+        setOriginalDocName('document');
+        setPreviewPageIndex(0);
+      }
+      const pagesToRemove = new Set(prevPages.filter(p => p.fileId === fileId).map(p => p.id));
+      setSelectedPages(prevSelected => prevSelected.filter(id => !pagesToRemove.has(id)));
+      return remainingPages;
+    });
+    showToast('File removed');
+  }, [saveHistory, showToast]);
+
   // 5. Complex State Handlers (Signatures & Attributes)
   const getSigPlacement = useCallback((sig: SignatureItem | undefined, index: number) => {
     if (!sig) return { x: 50, y: 80, scale: 50, opacity: 100 }
@@ -833,7 +855,6 @@ export default function PdfEditor() {
     accept: { 'application/pdf': ['.pdf'], 'image/jpeg': ['.jpg', '.jpeg'], 'image/png': ['.png'], 'image/webp': ['.webp'] }
   })
 
-  // Size Estimator UseEffect (already defined earlier, we can keep its hook at the top)
   useEffect(() => {
     if (activePanel === 'compression' && pages.length > 0) {
       let isMounted = true;
@@ -1642,7 +1663,7 @@ export default function PdfEditor() {
             <SortableContext items={fileBlocks.map(b => b.id)} strategy={rectSortingStrategy}>
               <div className="flex-1 overflow-y-auto custom-scrollbar pr-1 pb-4">
                 {fileBlocks.map((block, i) => (
-                  <SortableFileBlock key={block.id} block={block} index={i} />
+                  <SortableFileBlock key={block.id} block={block} index={i} onRemoveFile={removeFile} />
                 ))}
               </div>
             </SortableContext>
@@ -2256,7 +2277,7 @@ export default function PdfEditor() {
                   </div>
                   <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
                     <SortableContext items={pages.map(p => p.id)} strategy={rectSortingStrategy}>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 lg:gap-6 pb-6">
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 lg:gap-6 pb-6">
                         {pages.map((page, index) => (
                           <SortablePageItem 
                             key={page.id} 
@@ -2493,7 +2514,7 @@ export default function PdfEditor() {
              <div className="flex-1 overflow-auto relative w-full h-full z-10 flex items-center justify-center bg-slate-100">
                {showViewerGrid ? (
                  <div className="absolute inset-0 z-40 bg-slate-100 overflow-y-auto px-6 py-20 custom-scrollbar">
-                   <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 animate-in fade-in">
+                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4 animate-in fade-in">
                      {pages.map((p, idx) => (
                        <div key={p.id} onClick={() => { setPreviewPageIndex(idx); setShowViewerGrid(false); }} className={`cursor-pointer border-2 rounded-lg overflow-hidden aspect-[3/4] relative transition-colors bg-slate-100 shadow-xl ${previewPageIndex === idx ? 'border-[#6384A3] ring-2 ring-[#6384A3]/50' : 'border-slate-300 hover:border-slate-400'}`}>
                          <img src={p.url} alt={`Thumb ${idx+1}`} className="w-full h-full object-contain bg-white" style={{ transform: `rotate(${p.rotation + p.fineRotation}deg)` }} />
