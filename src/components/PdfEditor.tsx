@@ -388,7 +388,6 @@ export default function PdfEditor() {
   const [originalDocName, setOriginalDocName] = useState('document')
   const [showFileSerial, setShowFileSerial] = useState(true)
 
-  const [maxPagesLimit, setMaxPagesLimit] = useState(300);
   const [history, setHistory] = useState<{pages: PageItem[], signatures: SignatureItem[]}[]>([])
 
   const [activePanel, setActivePanel] = useState<PanelId>('export')
@@ -436,20 +435,12 @@ export default function PdfEditor() {
 
   // 2. Derived States
   const sigPageTarget = pages.length > 0 ? (pages[previewPageIndex] || pages[0]) : null
-  const memoryPercentage = Math.min(100, (pages.length / maxPagesLimit) * 100);
 
   // 3. Setup Sensors & Effects
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } })
   )
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-       const deviceMemory = 'deviceMemory' in navigator ? (navigator as any).deviceMemory : 4;
-       setMaxPagesLimit(Math.max(150, Math.min(600, deviceMemory * 75)));
-    }
-  }, []);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -755,11 +746,8 @@ export default function PdfEditor() {
     
     try {
       const newPages: PageItem[] = [];
-      let currentTotalPages = pages.length;
-      let hitMemoryLimit = false;
 
       for (const file of acceptedFiles) {
-        if (hitMemoryLimit) break;
 
         const currentFileId = `file-${Date.now()}-${Math.random().toString(36).substring(7)}`;
 
@@ -778,13 +766,6 @@ export default function PdfEditor() {
               continue
             }
             throw e
-          }
-          
-          // CRITICAL: Memory check before rendering
-          if (currentTotalPages + pdf.numPages > maxPagesLimit) {
-             alert(`System memory limit reached (${maxPagesLimit} pages maximum). "${file.name}" and any subsequent files were rejected to prevent your browser from crashing.`);
-             hitMemoryLimit = true;
-             break;
           }
           
           for (let i = 1; i <= pdf.numPages; i++) {
@@ -815,15 +796,8 @@ export default function PdfEditor() {
               rotation: 0, fineRotation: 0, scale: 1, brightness: 0, contrast: 0,
               saturation: 0, hue: 0, sepia: 0, grayscale: false, sharpen: 0
             })
-            currentTotalPages++;
           }
         } else if (file.type.startsWith('image/')) {
-          if (currentTotalPages + 1 > maxPagesLimit) {
-            alert(`System memory limit reached (${maxPagesLimit} pages maximum). Skipping remaining images.`);
-            hitMemoryLimit = true;
-            break;
-          }
-
           setLoadingText('Adding image...')
           await new Promise(r => setTimeout(r, 50))
           const objectUrl = URL.createObjectURL(file)
@@ -835,7 +809,6 @@ export default function PdfEditor() {
             rotation: 0, fineRotation: 0, scale: 1, brightness: 0, contrast: 0,
             saturation: 0, hue: 0, sepia: 0, grayscale: false, sharpen: 0
           })
-          currentTotalPages++;
         }
       }
 
@@ -844,12 +817,7 @@ export default function PdfEditor() {
         setPages(prev => [...prev, ...newPages])
         setShowViewerGrid(true) 
         setUnlockPassword('')
-        if (!hitMemoryLimit) showToast('Files loaded successfully')
-      }
-
-      // Proactive Warning
-      if (currentTotalPages >= maxPagesLimit * 0.8 && !hitMemoryLimit) {
-        setTimeout(() => alert(`Warning: You are approaching the safe memory limit (${currentTotalPages}/${maxPagesLimit} pages). Please export or clear documents soon to avoid performance degradation.`), 500);
+        showToast('Files loaded successfully')
       }
 
     } catch (error) {
@@ -858,7 +826,7 @@ export default function PdfEditor() {
       setIsProcessing(false)
       setLoadingText('')
     }
-  }, [unlockPassword, originalDocName, showToast, saveHistory, maxPagesLimit, pages.length]);
+  }, [unlockPassword, originalDocName, showToast, saveHistory]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -2164,19 +2132,8 @@ export default function PdfEditor() {
             {renderSidebarAccordions(false)}
           </div>
 
-          {/* Memory Health Bar & Global Actions (Sticky Bottom) */}
+          {/* Global Actions (Sticky Bottom) */}
           <div className="p-4 lg:p-6 border-t border-slate-200 flex-shrink-0 z-10 bg-slate-50">
-            <div className="mb-4">
-              <div className="flex justify-between text-[9px] font-bold uppercase tracking-widest text-slate-500 mb-1">
-                <span>Memory Capacity</span>
-                <span className={memoryPercentage > 80 ? 'text-red-500' : ''}>{pages.length} / {maxPagesLimit}</span>
-              </div>
-              <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden">
-                <div className={`h-full transition-all ${memoryPercentage > 80 ? 'bg-red-500' : 'bg-emerald-500'}`} style={{ width: `${memoryPercentage}%` }}></div>
-              </div>
-              {memoryPercentage > 80 && <p className="text-[8px] text-red-500 mt-1.5 leading-tight">Nearing capacity. Adding more files may cause browser instability.</p>}
-            </div>
-
             <div className="flex gap-2">
               <button onClick={handlePreview} disabled={isProcessing || pages.length === 0} className="flex-[0.5] py-2.5 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 disabled:opacity-50 transition-colors flex items-center justify-center shadow-sm" title="Preview File">
                 <Eye className="w-4 h-4" />
