@@ -8,7 +8,7 @@ import { removeBackground, Config } from '@imgly/background-removal'
 import { DndContext, closestCenter, TouchSensor, MouseSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, useSortable, rectSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Settings2, Trash2, Eye, Download, RotateCw, RotateCcw, Lock, Unlock, FileText, Type, SlidersHorizontal, X, FileImage, ShieldCheck, Layers, Scissors, Wand2, Hash, Edit3, PenTool, Image as ImageIcon, Sparkles, Move, ChevronLeft, ChevronRight, LayoutGrid, ZoomIn, ZoomOut, Plus, Trash, MoreVertical, CheckCircle2, Undo2 } from 'lucide-react'
+import { Settings2, Trash2, Eye, Download, RotateCw, RotateCcw, Lock, Unlock, FileText, Type, SlidersHorizontal, X, FileImage, ShieldCheck, Layers, Scissors, Wand2, Hash, Edit3, PenTool, Image as ImageIcon, Sparkles, Move, ChevronLeft, ChevronRight, LayoutGrid, ZoomIn, ZoomOut, Plus, Trash, MoreVertical, CheckCircle2, Undo2, PanelRightClose } from 'lucide-react'
 import CustomDropdown from './CustomDropdown'
 
 // --- HELPER FUNCTIONS ---
@@ -165,7 +165,7 @@ const getFilterString = (page: PageItem) => {
   return `${s}brightness(${b}%) contrast(${c}%) saturate(${sat}%) hue-rotate(${hue}deg) grayscale(${gray}%) sepia(${sep}%)`.trim();
 }
 
-// --- SORTABLE GRID ITEM (FILES) ---
+// --- SORTABLE GRID ITEM (FILES - SLIM) ---
 function SortableFileBlock({ block, index }: { block: FileBlock, index: number }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: block.id });
   const style = { transform: CSS.Transform.toString(transform), transition, zIndex: isDragging ? 50 : 1 };
@@ -176,18 +176,18 @@ function SortableFileBlock({ block, index }: { block: FileBlock, index: number }
       style={style}
       {...attributes}
       {...listeners}
-      className={`flex items-center justify-between p-3 mb-2 rounded border bg-white cursor-grab hover:border-[#6384A3] transition-all ${isDragging ? 'shadow-lg border-[#6384A3] opacity-80 scale-105' : 'border-slate-200 shadow-sm'}`}
+      className={`flex items-center justify-between p-2 mb-1.5 rounded border bg-white cursor-grab hover:border-[#6384A3] transition-all ${isDragging ? 'shadow-lg border-[#6384A3] opacity-80 scale-105' : 'border-slate-200 shadow-sm'}`}
     >
-      <div className="flex flex-col overflow-hidden">
-        <span className="text-xs font-bold text-slate-700 truncate block">
+      <div className="flex flex-col overflow-hidden w-full pr-2">
+        <span className="text-[10px] font-bold text-slate-700 truncate block">
           {index + 1}. {block.fileName}
         </span>
-        <span className="text-[10px] text-slate-500">
-          {block.pageIds.length} {block.pageIds.length === 1 ? 'page' : 'pages'}
+        <span className="text-[8px] font-semibold uppercase tracking-widest text-slate-400">
+          {block.pageIds.length} {block.pageIds.length === 1 ? 'pg' : 'pgs'}
         </span>
       </div>
-      <div className="text-slate-400">
-        <Layers className="w-4 h-4" />
+      <div className="text-slate-300 flex-shrink-0">
+        <Layers className="w-3.5 h-3.5" />
       </div>
     </div>
   );
@@ -373,10 +373,11 @@ type SignatureItem = {
   placements: Record<number, SigPlacement>; 
 }
 
-type PanelId = 'organizer' | 'security' | 'overlays' | 'compression' | 'merge' | 'split' | 'enhance' | 'signature' | 'export' | 'page-edit' | null;
+type PanelId = 'security' | 'overlays' | 'compression' | 'merge' | 'split' | 'enhance' | 'signature' | 'export' | 'page-edit' | null;
 type FullScreenMode = 'edit' | 'preview' | null;
 
 export default function PdfEditor() {
+  // 1. All State Hooks
   const [pages, setPages] = useState<PageItem[]>([])
   const [selectedPages, setSelectedPages] = useState<string[]>([])
   const [isMultiSelectMode, setIsMultiSelectMode] = useState(false)
@@ -385,38 +386,16 @@ export default function PdfEditor() {
   const [toast, setToast] = useState<{message: string, id: number} | null>(null)
   
   const [originalDocName, setOriginalDocName] = useState('document')
+  const [showFileSerial, setShowFileSerial] = useState(true)
 
-  // Global Undo History
+  const [maxPagesLimit, setMaxPagesLimit] = useState(300);
   const [history, setHistory] = useState<{pages: PageItem[], signatures: SignatureItem[]}[]>([])
 
-  // UI State
   const [activePanel, setActivePanel] = useState<PanelId>('export')
   const [fullScreenMode, setFullScreenMode] = useState<FullScreenMode>(null)
   const panelRefs = useRef<Record<string, HTMLDivElement | null>>({})
-  const [showViewerGrid, setShowViewerGrid] = useState(true) // Open Grid By Default
+  const [showViewerGrid, setShowViewerGrid] = useState(true)
   const [isStraightening, setIsStraightening] = useState(false)
-
-  useEffect(() => {
-    if (activePanel && panelRefs.current[activePanel]) {
-      setTimeout(() => {
-        panelRefs.current[activePanel]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-      }, 150)
-    }
-
-    if (activePanel === 'merge' || activePanel === 'split' || activePanel === 'organizer') {
-      setShowViewerGrid(true);
-    } else if (activePanel === 'page-edit' || activePanel === 'signature') {
-      setShowViewerGrid(false);
-    }
-  }, [activePanel])
-
-  const showToast = useCallback((message: string) => {
-    const id = Date.now();
-    setToast({ message, id });
-    setTimeout(() => {
-      setToast(current => current?.id === id ? null : current);
-    }, 3000);
-  }, []);
 
   const [unlockPassword, setUnlockPassword] = useState('')
   const [encryptPassword, setEncryptPassword] = useState('')
@@ -426,7 +405,6 @@ export default function PdfEditor() {
   const [watermarkOpacity, setWatermarkOpacity] = useState(30)
   const [addPageNumbers, setAddPageNumbers] = useState(false)
   
-  // Multiple Signatures State
   const [signatures, setSignatures] = useState<SignatureItem[]>([])
   const [activeSigId, setActiveSigId] = useState<string | null>(null)
   const [sigBgModel, setSigBgModel] = useState('document-advanced')
@@ -445,7 +423,6 @@ export default function PdfEditor() {
   const rightSideSigRef = useRef<HTMLDivElement>(null)
   const modalSigRef = useRef<HTMLDivElement>(null)
 
-  // Compression & Export State
   const [enableCompression, setEnableCompression] = useState(false)
   const [compressionQuality, setCompressionQuality] = useState(70)
   const [ppiMode, setPpiMode] = useState<string>('150')
@@ -457,14 +434,22 @@ export default function PdfEditor() {
   const [splitRanges, setSplitRanges] = useState('')
   const [exportFormat, setExportFormat] = useState('pdf')
 
-  // -- DERIVED STATES --
+  // 2. Derived States
   const sigPageTarget = pages.length > 0 ? (pages[previewPageIndex] || pages[0]) : null
+  const memoryPercentage = Math.min(100, (pages.length / maxPagesLimit) * 100);
 
-  // Advanced Mobile-Friendly Sensors
+  // 3. Setup Sensors & Effects
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } })
   )
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+       const deviceMemory = 'deviceMemory' in navigator ? (navigator as any).deviceMemory : 4;
+       setMaxPagesLimit(Math.max(150, Math.min(600, deviceMemory * 75)));
+    }
+  }, []);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -483,7 +468,28 @@ export default function PdfEditor() {
     }
   }, [pages.length, previewPageIndex])
 
-  // --- HISTORY LOGIC ---
+  useEffect(() => {
+    if (activePanel && panelRefs.current[activePanel]) {
+      setTimeout(() => {
+        panelRefs.current[activePanel]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+      }, 150)
+    }
+    if (activePanel === 'merge' || activePanel === 'split') {
+      setShowViewerGrid(true);
+    } else if (activePanel === 'page-edit' || activePanel === 'signature') {
+      setShowViewerGrid(false);
+    }
+  }, [activePanel])
+
+  // 4. Simple Utility Handlers
+  const showToast = useCallback((message: string) => {
+    const id = Date.now();
+    setToast({ message, id });
+    setTimeout(() => {
+      setToast(current => current?.id === id ? null : current);
+    }, 3000);
+  }, []);
+
   const saveHistory = useCallback(() => {
     setHistory(prev => {
       const clonedPages = pages.map(p => ({ ...p }));
@@ -509,7 +515,174 @@ export default function PdfEditor() {
     });
   }, [showToast]);
 
-  // --- FILE BLOCKS FOR SERIALIZATION & REORDERING ---
+  const clearAll = useCallback(() => {
+    saveHistory();
+    setPages([])
+    setOriginalDocName('document')
+    setPreviewPageIndex(0)
+    setSignatures([])
+    setActiveSigId(null)
+    setSelectedPages([])
+    setIsMultiSelectMode(false)
+    setShowViewerGrid(true)
+    showToast('All pages & settings cleared')
+  }, [saveHistory, showToast]);
+
+  // 5. Complex State Handlers (Signatures & Attributes)
+  const getSigPlacement = useCallback((sig: SignatureItem | undefined, index: number) => {
+    if (!sig) return { x: 50, y: 80, scale: 50, opacity: 100 }
+    return sig.placements?.[index] || { x: 50, y: 80, scale: 50, opacity: 100 }
+  }, [])
+
+  const updateSigPlacement = useCallback((sigId: string, index: number, updates: Partial<SigPlacement>) => {
+    setSignatures(sigs => sigs.map(s => {
+      if (s.id !== sigId) return s;
+      return {
+        ...s,
+        placements: {
+          ...s.placements,
+          [index]: { ...getSigPlacement(s, index), ...updates }
+        }
+      }
+    }))
+  }, [getSigPlacement])
+
+  const shouldApplySignature = useCallback((pageIndex: number, applyMode: 'all' | 'custom', customPages: string) => {
+    if (applyMode === 'all') return true;
+    if (!customPages.trim()) return false;
+    
+    const pagesToApply = new Set<number>();
+    const parts = customPages.split(',');
+    for (const p of parts) {
+      const trimP = p.trim();
+      if (!trimP) continue;
+      if (trimP.includes('-')) {
+        const [s, e] = trimP.split('-').map(n => parseInt(n, 10));
+        if (!isNaN(s) && !isNaN(e)) {
+          for(let i = Math.min(s, e); i <= Math.max(s, e); i++) pagesToApply.add(i - 1);
+        }
+      } else {
+        const n = parseInt(trimP, 10);
+        if (!isNaN(n)) pagesToApply.add(n - 1);
+      }
+    }
+    return pagesToApply.has(pageIndex);
+  }, [])
+
+  const addNewSignature = useCallback(() => {
+    saveHistory();
+    const newSig: SignatureItem = {
+      id: `sig-${Date.now()}`,
+      mode: 'text',
+      text: 'New Signature',
+      font: 'Brush Script MT, cursive',
+      color: '#000033',
+      imageUrl: null,
+      applyMode: 'all',
+      customPages: '',
+      placements: {}
+    }
+    setSignatures(prev => [...prev, newSig])
+    setActiveSigId(newSig.id)
+    showToast('New signature added')
+  }, [saveHistory, showToast]);
+
+  const updateSignature = useCallback((id: string, updates: Partial<SignatureItem>) => {
+    setSignatures(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s))
+  }, []);
+
+  const removeSignature = useCallback((id: string) => {
+    saveHistory();
+    setSignatures(prev => {
+      const newSigs = prev.filter(s => s.id !== id);
+      if (activeSigId === id) setActiveSigId(newSigs.length > 0 ? newSigs[0].id : null);
+      return newSigs;
+    });
+    showToast('Signature removed');
+  }, [activeSigId, saveHistory, showToast]);
+
+  const syncPlacementToAllPages = useCallback((sigId: string, sourceIndex: number) => {
+    saveHistory();
+    setSignatures(sigs => sigs.map(s => {
+      if (s.id !== sigId) return s;
+      const sourcePlacement = getSigPlacement(s, sourceIndex);
+      const newPlacements: Record<number, SigPlacement> = {};
+      pages.forEach((_, i) => { newPlacements[i] = { ...sourcePlacement }; });
+      return { ...s, applyMode: 'all', placements: newPlacements }
+    }))
+    showToast('Signature position applied to all pages')
+  }, [pages, getSigPlacement, saveHistory, showToast]);
+
+  const updatePageAttributes = useCallback((id: string, updates: Partial<PageItem>) => {
+    setPages(items => items.map(item => item.id === id ? { ...item, ...updates } : item))
+  }, []);
+
+  // 6. Drag & Interaction Handlers
+  const handlePointerDownSig = useCallback((e: React.PointerEvent, ctx: 'right' | 'modal', sigId: string) => { 
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) {}
+    saveHistory(); 
+    setIsDraggingSig(true); 
+    setDraggingContext(ctx); 
+    setDraggingSigId(sigId); 
+    setActiveSigId(sigId); 
+    setOpenMenuSigId(null);
+  }, [saveHistory]);
+
+  const handlePointerUpSig = useCallback(() => { 
+    setIsDraggingSig(false); 
+    setDraggingContext(null); 
+    setResizingState(null); 
+    setDraggingSigId(null); 
+  }, []);
+  
+  const handleResizeDown = useCallback((e: React.PointerEvent, corner: string, ctx: 'right' | 'modal', sigId: string) => {
+    e.stopPropagation() 
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) {}
+    const sig = signatures.find(s => s.id === sigId)
+    if (!sig) return;
+    saveHistory(); 
+    setResizingState({
+      startX: e.clientX,
+      startY: e.clientY,
+      startScale: getSigPlacement(sig, previewPageIndex).scale,
+      corner,
+      sigId
+    })
+    setDraggingContext(ctx)
+    setActiveSigId(sigId)
+    setOpenMenuSigId(null)
+  }, [signatures, saveHistory, getSigPlacement, previewPageIndex]);
+
+  const handlePointerMoveSig = useCallback((e: React.PointerEvent) => {
+    if (!draggingContext) return
+
+    if (resizingState) {
+      const dx = e.clientX - resizingState.startX
+      const dy = e.clientY - resizingState.startY
+      let delta = 0
+      
+      if (resizingState.corner === 'br') delta = (dx + dy) * 0.2
+      else if (resizingState.corner === 'tl') delta = -(dx + dy) * 0.2
+      else if (resizingState.corner === 'tr') delta = (dx - dy) * 0.2
+      else if (resizingState.corner === 'bl') delta = (-dx + dy) * 0.2
+
+      const newScale = Math.max(10, Math.min(200, resizingState.startScale + delta))
+      updateSigPlacement(resizingState.sigId, previewPageIndex, { scale: newScale })
+      return
+    }
+
+    if (isDraggingSig && draggingSigId) {
+      const ref = draggingContext === 'right' ? rightSideSigRef : modalSigRef
+      if (!ref.current) return
+      const rect = ref.current.getBoundingClientRect()
+      let x = ((e.clientX - rect.left) / rect.width) * 100
+      let y = ((e.clientY - rect.top) / rect.height) * 100
+      x = Math.max(0, Math.min(100, x))
+      y = Math.max(0, Math.min(100, y))
+      updateSigPlacement(draggingSigId, previewPageIndex, { x, y })
+    }
+  }, [draggingContext, resizingState, isDraggingSig, draggingSigId, previewPageIndex, updateSigPlacement]);
+
   const getFileBlocks = useCallback((): FileBlock[] => {
     const blocks: FileBlock[] = [];
     let currentBlock: FileBlock | null = null;
@@ -518,7 +691,7 @@ export default function PdfEditor() {
       if (!currentBlock || currentBlock.fileId !== page.fileId) {
         if (currentBlock) blocks.push(currentBlock);
         currentBlock = {
-          id: `block-${page.fileId}-${index}`, // Unique ID for DndKit
+          id: `block-${page.fileId}-${index}`, 
           fileId: page.fileId,
           fileName: page.fileName,
           pageIds: [page.id],
@@ -533,7 +706,7 @@ export default function PdfEditor() {
     return blocks;
   }, [pages]);
 
-  const handleBlockDragEnd = (event: DragEndEvent) => {
+  const handleBlockDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event;
     if (over && active.id !== over.id) {
       const blocks = getFileBlocks();
@@ -542,9 +715,7 @@ export default function PdfEditor() {
 
       if (oldIndex !== -1 && newIndex !== -1) {
         saveHistory();
-        
         const reorderedBlocks = arrayMove(blocks, oldIndex, newIndex);
-        
         const newPagesOrder: PageItem[] = [];
         reorderedBlocks.forEach(block => {
           block.pageIds.forEach(pageId => {
@@ -552,14 +723,149 @@ export default function PdfEditor() {
             if (page) newPagesOrder.push(page);
           });
         });
-
         setPages(newPagesOrder);
         showToast('Files reordered');
       }
     }
-  };
+  }, [getFileBlocks, saveHistory, pages, showToast]);
 
-  // --- COMPRESSION SIZE ESTIMATOR ---
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event
+    if (over && active.id !== over.id) {
+      saveHistory();
+      setPages((items) => {
+        const oldIndex = items.findIndex((item) => item.id === active.id)
+        const newIndex = items.findIndex((item) => item.id === over.id)
+        return arrayMove(items, oldIndex, newIndex)
+      })
+      showToast('Pages reordered')
+    }
+  }, [saveHistory, showToast]);
+
+  // 7. Core Features (Drop, Enhance, Background Removal)
+  const onDrop = useCallback(async (acceptedFiles: File[]) => {
+    if (acceptedFiles.length === 0) return
+    setIsProcessing(true)
+
+    if (!originalDocName || originalDocName === 'document') {
+      const firstFileName = acceptedFiles[0].name
+      const baseName = firstFileName.substring(0, firstFileName.lastIndexOf('.')) || firstFileName
+      setOriginalDocName(baseName)
+    }
+    
+    try {
+      const newPages: PageItem[] = [];
+      let currentTotalPages = pages.length;
+      let hitMemoryLimit = false;
+
+      for (const file of acceptedFiles) {
+        if (hitMemoryLimit) break;
+
+        const currentFileId = `file-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+
+        if (file.type === 'application/pdf') {
+          setLoadingText(`Reading ${file.name}...`)
+          await new Promise(r => setTimeout(r, 50))
+          const arrayBuffer = await file.arrayBuffer()
+          const pdfjsLib = await import('pdfjs-dist')
+          
+          let pdf;
+          try {
+            pdf = await pdfjsLib.getDocument({ data: arrayBuffer, password: unlockPassword }).promise
+          } catch (e: any) {
+            if (e.name === 'PasswordException') {
+              alert(`The file ${file.name} is password protected. Enter the password in the 'Security' tab and try again.`)
+              continue
+            }
+            throw e
+          }
+          
+          // CRITICAL: Memory check before rendering
+          if (currentTotalPages + pdf.numPages > maxPagesLimit) {
+             alert(`System memory limit reached (${maxPagesLimit} pages maximum). "${file.name}" and any subsequent files were rejected to prevent your browser from crashing.`);
+             hitMemoryLimit = true;
+             break;
+          }
+          
+          for (let i = 1; i <= pdf.numPages; i++) {
+            setLoadingText(`Extracting page ${i}/${pdf.numPages}...`)
+            const page = await pdf.getPage(i)
+            
+            const viewport = page.getViewport({ scale: 1.0 })
+            const canvas = document.createElement('canvas')
+            const context = canvas.getContext('2d')
+            if (!context) continue
+
+            canvas.height = viewport.height
+            canvas.width = viewport.width
+
+            await page.render({ canvasContext: context, viewport } as any).promise
+            
+            const objectUrl = await new Promise<string>((resolve) => {
+               canvas.toBlob((blob) => {
+                  resolve(URL.createObjectURL(blob!));
+               }, 'image/jpeg', 0.9);
+            });
+
+            newPages.push({
+              id: `pdf-page-${Date.now()}-${Math.random()}`,
+              fileId: currentFileId,
+              fileName: file.name,
+              url: objectUrl, originalUrl: objectUrl, isLossless: false,
+              rotation: 0, fineRotation: 0, scale: 1, brightness: 0, contrast: 0,
+              saturation: 0, hue: 0, sepia: 0, grayscale: false, sharpen: 0
+            })
+            currentTotalPages++;
+          }
+        } else if (file.type.startsWith('image/')) {
+          if (currentTotalPages + 1 > maxPagesLimit) {
+            alert(`System memory limit reached (${maxPagesLimit} pages maximum). Skipping remaining images.`);
+            hitMemoryLimit = true;
+            break;
+          }
+
+          setLoadingText('Adding image...')
+          await new Promise(r => setTimeout(r, 50))
+          const objectUrl = URL.createObjectURL(file)
+          newPages.push({
+            id: `image-${file.name}-${Date.now()}`,
+            fileId: currentFileId,
+            fileName: file.name,
+            url: objectUrl, originalUrl: objectUrl, isLossless: file.type === 'image/png' || file.type === 'image/webp',
+            rotation: 0, fineRotation: 0, scale: 1, brightness: 0, contrast: 0,
+            saturation: 0, hue: 0, sepia: 0, grayscale: false, sharpen: 0
+          })
+          currentTotalPages++;
+        }
+      }
+
+      if (newPages.length > 0) {
+        saveHistory();
+        setPages(prev => [...prev, ...newPages])
+        setShowViewerGrid(true) 
+        setUnlockPassword('')
+        if (!hitMemoryLimit) showToast('Files loaded successfully')
+      }
+
+      // Proactive Warning
+      if (currentTotalPages >= maxPagesLimit * 0.8 && !hitMemoryLimit) {
+        setTimeout(() => alert(`Warning: You are approaching the safe memory limit (${currentTotalPages}/${maxPagesLimit} pages). Please export or clear documents soon to avoid performance degradation.`), 500);
+      }
+
+    } catch (error) {
+      alert("Failed to process the file. It may be corrupted or highly encrypted.")
+    } finally {
+      setIsProcessing(false)
+      setLoadingText('')
+    }
+  }, [unlockPassword, originalDocName, showToast, saveHistory, maxPagesLimit, pages.length]);
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    accept: { 'application/pdf': ['.pdf'], 'image/jpeg': ['.jpg', '.jpeg'], 'image/png': ['.png'], 'image/webp': ['.webp'] }
+  })
+
+  // Size Estimator UseEffect (already defined earlier, we can keep its hook at the top)
   useEffect(() => {
     if (activePanel === 'compression' && pages.length > 0) {
       let isMounted = true;
@@ -568,7 +874,6 @@ export default function PdfEditor() {
           let origBytes = 0;
           for (const p of pages) {
             if (p.url.startsWith('data:') || p.url.startsWith('blob:')) {
-               // Roughly estimate size based on generic page weight if we can't measure perfectly
                origBytes += 1024 * 1024;
             } else {
               try {
@@ -600,213 +905,225 @@ export default function PdfEditor() {
           console.error("Size estimation failed silently", e);
         }
       };
-      
       const timer = setTimeout(estimateSizes, 400);
       return () => { isMounted = false; clearTimeout(timer); };
     }
   }, [activePanel, pages, enableCompression, compressionQuality, ppiMode, customPPI, compressionGrayscale]);
 
-  // --- SIGNATURE HELPERS ---
-  const addNewSignature = () => {
-    saveHistory();
-    const newSig: SignatureItem = {
-      id: `sig-${Date.now()}`,
-      mode: 'text',
-      text: 'New Signature',
-      font: 'Brush Script MT, cursive',
-      color: '#000033',
-      imageUrl: null,
-      applyMode: 'all',
-      customPages: '',
-      placements: {}
-    }
-    setSignatures(prev => [...prev, newSig])
-    setActiveSigId(newSig.id)
-    showToast('New signature added')
-  }
-
-  const updateSignature = (id: string, updates: Partial<SignatureItem>) => {
-    setSignatures(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s))
-  }
-
-  const removeSignature = (id: string) => {
-    saveHistory();
-    const newSigs = signatures.filter(s => s.id !== id);
-    setSignatures(newSigs);
-    if (activeSigId === id) {
-      setActiveSigId(newSigs.length > 0 ? newSigs[0].id : null);
-    }
-    showToast('Signature removed');
-  }
-
-  const getSigPlacement = useCallback((sig: SignatureItem | undefined, index: number) => {
-    if (!sig) return { x: 50, y: 80, scale: 50, opacity: 100 }
-    return sig.placements?.[index] || { x: 50, y: 80, scale: 50, opacity: 100 }
-  }, [])
-
-  const updateSigPlacement = useCallback((sigId: string, index: number, updates: Partial<SigPlacement>) => {
-    setSignatures(sigs => sigs.map(s => {
-      if (s.id !== sigId) return s;
-      return {
-        ...s,
-        placements: {
-          ...s.placements,
-          [index]: { ...getSigPlacement(s, index), ...updates }
-        }
-      }
-    }))
-  }, [getSigPlacement])
-
-  const syncPlacementToAllPages = (sigId: string, sourceIndex: number) => {
-    saveHistory();
-    setSignatures(sigs => sigs.map(s => {
-      if (s.id !== sigId) return s;
-      const sourcePlacement = getSigPlacement(s, sourceIndex);
-      const newPlacements: Record<number, SigPlacement> = {};
-      pages.forEach((_, i) => {
-        newPlacements[i] = { ...sourcePlacement };
-      });
-      return {
-        ...s,
-        applyMode: 'all',
-        placements: newPlacements
-      }
-    }))
-    showToast('Signature position applied to all pages')
-  }
-
-  const shouldApplySignature = useCallback((pageIndex: number, applyMode: 'all' | 'custom', customPages: string) => {
-    if (applyMode === 'all') return true;
-    if (!customPages.trim()) return false;
-    
-    const pagesToApply = new Set<number>();
-    const parts = customPages.split(',');
-    for (const p of parts) {
-      const trimP = p.trim();
-      if (!trimP) continue;
-      if (trimP.includes('-')) {
-        const [s, e] = trimP.split('-').map(n => parseInt(n, 10));
-        if (!isNaN(s) && !isNaN(e)) {
-          for(let i = Math.min(s, e); i <= Math.max(s, e); i++) pagesToApply.add(i - 1);
-        }
-      } else {
-        const n = parseInt(trimP, 10);
-        if (!isNaN(n)) pagesToApply.add(n - 1);
-      }
-    }
-    return pagesToApply.has(pageIndex);
-  }, [])
-
-  // --- MEMORY OPTIMIZED DROP HANDLER ---
-  const onDrop = useCallback(async (acceptedFiles: File[]) => {
-    if (acceptedFiles.length === 0) return
+  const handleRemovePageBg = async (pageId: string, imageUrl: string) => {
+    if (!imageUrl) return
     setIsProcessing(true)
+    setLoadingText('Removing Background from Page...')
+    await new Promise(r => setTimeout(r, 50)) 
 
-    if (!originalDocName || originalDocName === 'document') {
-      const firstFileName = acceptedFiles[0].name
-      const baseName = firstFileName.substring(0, firstFileName.lastIndexOf('.')) || firstFileName
-      setOriginalDocName(baseName)
-    }
-    
     try {
-      const newPages: PageItem[] = []
+      const optimizedDataUrl = await optimizeImageForAI(imageUrl)
+      let removedSuccessfully = false;
 
-      for (const file of acceptedFiles) {
-        const currentFileId = `file-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+      if (pageBgModel === 'document-advanced') {
+        try {
+          const cleanedDataUrl = await processDocumentTextExtraction(optimizedDataUrl);
+          saveHistory();
+          updatePageAttributes(pageId, { url: cleanedDataUrl });
+          removedSuccessfully = true;
+        } catch (err) {
+          console.warn("Document text extraction failed", err);
+        }
+      } else if (pageBgModel === 'briaai/RMBG-1.4') {
+        try {
+          const { AutoModel, AutoProcessor, RawImage, env } = await import('@huggingface/transformers');
+          env.allowLocalModels = false; 
+          const model = await AutoModel.from_pretrained(pageBgModel, {
+            config: { model_type: 'custom' } as any,
+          });
+          const processor = await AutoProcessor.from_pretrained(pageBgModel, {
+            config: {
+              do_normalize: true, do_pad: false, do_rescale: true, do_resize: true,
+              image_mean: [0.5, 0.5, 0.5], feature_extractor_type: "ImageFeatureExtractor",
+              image_std: [1, 1, 1], resample: 2, rescale_factor: 0.00392156862745098,
+              size: { width: 1024, height: 1024 }
+            } as any
+          });
+          const imageToProcess = await RawImage.fromURL(optimizedDataUrl);
+          const { pixel_values } = await processor(imageToProcess);
+          const outputs = await model({ input: pixel_values });
+          const outTensor = Object.values(outputs)[0] as any;
+          if (!outTensor || !outTensor.data) throw new Error("Invalid tensor output");
 
-        if (file.type === 'application/pdf') {
-          setLoadingText(`Extracting ${file.name}...`)
-          await new Promise(r => setTimeout(r, 50))
-          const arrayBuffer = await file.arrayBuffer()
-          const pdfjsLib = await import('pdfjs-dist')
-          
-          let pdf;
-          try {
-            pdf = await pdfjsLib.getDocument({ data: arrayBuffer, password: unlockPassword }).promise
-          } catch (e: any) {
-            if (e.name === 'PasswordException') {
-              alert(`The file ${file.name} is password protected. Enter the password in the 'Security' tab and try again.`)
-              continue
-            }
-            throw e
+          const maskWidth = outTensor.dims[3];
+          const maskHeight = outTensor.dims[2];
+          const maskCanvas = document.createElement('canvas');
+          maskCanvas.width = maskWidth;
+          maskCanvas.height = maskHeight;
+          const maskCtx = maskCanvas.getContext('2d');
+          if (!maskCtx) throw new Error("Mask Context failed");
+          const imgData = maskCtx.createImageData(maskWidth, maskHeight);
+          for (let i = 0; i < outTensor.data.length; i++) {
+             const val = Math.max(0, Math.min(255, Math.round(outTensor.data[i] * 255)));
+             imgData.data[i * 4] = 0;     // R
+             imgData.data[i * 4 + 1] = 0; // G
+             imgData.data[i * 4 + 2] = 0; // B
+             imgData.data[i * 4 + 3] = val; 
           }
+          maskCtx.putImageData(imgData, 0, 0);
+
+          const originalImg = await createImage(imageUrl);
+          const finalCanvas = document.createElement('canvas');
+          finalCanvas.width = originalImg.width;
+          finalCanvas.height = originalImg.height;
+          const finalCtx = finalCanvas.getContext('2d');
+          if (!finalCtx) throw new Error("Final context failed");
+          finalCtx.drawImage(originalImg, 0, 0);
+          finalCtx.globalCompositeOperation = 'destination-in';
+          finalCtx.drawImage(maskCanvas, 0, 0, finalCanvas.width, finalCanvas.height);
           
-          for (let i = 1; i <= pdf.numPages; i++) {
-            const page = await pdf.getPage(i)
-            // Memory Fix 1: Render at 1.0 scale to avoid JS heap crash
-            const viewport = page.getViewport({ scale: 1.0 })
-            const canvas = document.createElement('canvas')
-            const context = canvas.getContext('2d')
-            if (!context) continue
-
-            canvas.height = viewport.height
-            canvas.width = viewport.width
-
-            await page.render({ canvasContext: context, viewport } as any).promise
-            
-            // Memory Fix 2: Use Blobs to store image outside JS heap
-            const objectUrl = await new Promise<string>((resolve) => {
-               canvas.toBlob((blob) => {
-                  resolve(URL.createObjectURL(blob!));
-               }, 'image/jpeg', 0.9);
-            });
-
-            newPages.push({
-              id: `pdf-page-${Date.now()}-${Math.random()}`,
-              fileId: currentFileId,
-              fileName: file.name,
-              url: objectUrl, originalUrl: objectUrl, isLossless: false,
-              rotation: 0, fineRotation: 0, scale: 1, brightness: 0, contrast: 0,
-              saturation: 0, hue: 0, sepia: 0, grayscale: false, sharpen: 0
-            })
-          }
-        } else if (file.type.startsWith('image/')) {
-          setLoadingText('Adding image...')
-          await new Promise(r => setTimeout(r, 50))
-          const objectUrl = URL.createObjectURL(file)
-          newPages.push({
-            id: `image-${file.name}-${Date.now()}`,
-            fileId: currentFileId,
-            fileName: file.name,
-            url: objectUrl, originalUrl: objectUrl, isLossless: file.type === 'image/png' || file.type === 'image/webp',
-            rotation: 0, fineRotation: 0, scale: 1, brightness: 0, contrast: 0,
-            saturation: 0, hue: 0, sepia: 0, grayscale: false, sharpen: 0
-          })
+          saveHistory();
+          updatePageAttributes(pageId, { url: finalCanvas.toDataURL('image/png') })
+          removedSuccessfully = true;
+        } catch (hfError) {
+          console.warn("Manual RMBG-1.4 engine failed. Falling back to Imgly...", hfError);
         }
       }
 
-      saveHistory();
-      setPages(prev => [...prev, ...newPages])
-      setShowViewerGrid(true) 
-      setUnlockPassword('')
-      showToast('Files loaded successfully')
-    } catch (error) {
-      alert("Failed to process the file. It may be corrupted or highly encrypted.")
+      if (!removedSuccessfully) {
+        const fallbackModel = pageBgModel === 'briaai/RMBG-1.4' || pageBgModel === 'document-advanced' ? 'isnet' : pageBgModel;
+        const bgConfig: Config = { model: fallbackModel as any, output: { format: "image/png" } }
+        const blob = await removeBackground(imageUrl, bgConfig) 
+        saveHistory();
+        updatePageAttributes(pageId, { url: URL.createObjectURL(blob) })
+      }
+      showToast('Page background removed')
+    } catch (e) {
+      alert("Background removal failed.")
     } finally {
       setIsProcessing(false)
       setLoadingText('')
     }
-  }, [unlockPassword, originalDocName, showToast, saveHistory])
+  }
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop,
-    accept: { 'application/pdf': ['.pdf'], 'image/jpeg': ['.jpg', '.jpeg'], 'image/png': ['.png'], 'image/webp': ['.webp'] }
-  })
+  const handleRemoveSigBg = async (sigId: string, imageUrl: string) => {
+    if (!imageUrl) return
+    setIsProcessing(true)
+    setLoadingText('Removing Background...')
+    await new Promise(r => setTimeout(r, 50)) 
 
-  const handleDragEnd = (event: DragEndEvent) => {
-    const { active, over } = event
-    if (over && active.id !== over.id) {
-      saveHistory();
-      setPages((items) => {
-        const oldIndex = items.findIndex((item) => item.id === active.id)
-        const newIndex = items.findIndex((item) => item.id === over.id)
-        return arrayMove(items, oldIndex, newIndex)
-      })
-      showToast('Pages reordered')
+    try {
+      const optimizedDataUrl = await optimizeImageForAI(imageUrl)
+      let removedSuccessfully = false;
+
+      if (sigBgModel === 'document-advanced') {
+        try {
+          const cleanedDataUrl = await processDocumentTextExtraction(optimizedDataUrl);
+          saveHistory();
+          updateSignature(sigId, { imageUrl: cleanedDataUrl });
+          removedSuccessfully = true;
+        } catch (err) {
+          console.warn("Document text extraction failed", err);
+        }
+      } else if (sigBgModel === 'briaai/RMBG-1.4') {
+        try {
+          const { AutoModel, AutoProcessor, RawImage, env } = await import('@huggingface/transformers');
+          env.allowLocalModels = false; 
+          const model = await AutoModel.from_pretrained(sigBgModel, {
+            config: { model_type: 'custom' } as any,
+          });
+          const processor = await AutoProcessor.from_pretrained(sigBgModel, {
+            config: {
+              do_normalize: true, do_pad: false, do_rescale: true, do_resize: true,
+              image_mean: [0.5, 0.5, 0.5], feature_extractor_type: "ImageFeatureExtractor",
+              image_std: [1, 1, 1], resample: 2, rescale_factor: 0.00392156862745098,
+              size: { width: 1024, height: 1024 }
+            } as any
+          });
+          const imageToProcess = await RawImage.fromURL(optimizedDataUrl);
+          const { pixel_values } = await processor(imageToProcess);
+          const outputs = await model({ input: pixel_values });
+          const outTensor = Object.values(outputs)[0] as any;
+          if (!outTensor || !outTensor.data) throw new Error("Invalid tensor output");
+
+          const maskWidth = outTensor.dims[3];
+          const maskHeight = outTensor.dims[2];
+          const maskCanvas = document.createElement('canvas');
+          maskCanvas.width = maskWidth;
+          maskCanvas.height = maskHeight;
+          const maskCtx = maskCanvas.getContext('2d');
+          if (!maskCtx) throw new Error("Mask Context failed");
+          const imgData = maskCtx.createImageData(maskWidth, maskHeight);
+          for (let i = 0; i < outTensor.data.length; i++) {
+             const val = Math.max(0, Math.min(255, Math.round(outTensor.data[i] * 255)));
+             imgData.data[i * 4] = 0;     // R
+             imgData.data[i * 4 + 1] = 0; // G
+             imgData.data[i * 4 + 2] = 0; // B
+             imgData.data[i * 4 + 3] = val; 
+          }
+          maskCtx.putImageData(imgData, 0, 0);
+
+          const originalImg = await createImage(imageUrl);
+          const finalCanvas = document.createElement('canvas');
+          finalCanvas.width = originalImg.width;
+          finalCanvas.height = originalImg.height;
+          const finalCtx = finalCanvas.getContext('2d');
+          if (!finalCtx) throw new Error("Final context failed");
+          finalCtx.drawImage(originalImg, 0, 0);
+          finalCtx.globalCompositeOperation = 'destination-in';
+          finalCtx.drawImage(maskCanvas, 0, 0, finalCanvas.width, finalCanvas.height);
+          
+          saveHistory();
+          updateSignature(sigId, { imageUrl: finalCanvas.toDataURL('image/png') })
+          removedSuccessfully = true;
+        } catch (hfError) {
+          console.warn("Manual RMBG-1.4 engine failed. Falling back to Imgly...", hfError);
+        }
+      }
+
+      if (!removedSuccessfully) {
+        const fallbackModel = sigBgModel === 'briaai/RMBG-1.4' || sigBgModel === 'document-advanced' ? 'isnet' : sigBgModel;
+        const bgConfig: Config = { model: fallbackModel as any, output: { format: "image/png" } }
+        const blob = await removeBackground(imageUrl, bgConfig) 
+        saveHistory();
+        updateSignature(sigId, { imageUrl: URL.createObjectURL(blob) })
+      }
+      showToast('Signature background removed')
+    } catch (e) {
+      alert("Background removal failed.")
+    } finally {
+      setIsProcessing(false)
+      setLoadingText('')
     }
   }
 
-  // Batch / Single Page Interactions
+  const handleEnhanceSig = async (sigId: string, imageUrl: string) => {
+    if (!imageUrl) return
+    setIsProcessing(true)
+    setLoadingText('Enhancing Signature...')
+    await new Promise(r => setTimeout(r, 50))
+
+    try {
+      const img = await createImage(imageUrl)
+      const cvs = document.createElement('canvas')
+      cvs.width = img.width; cvs.height = img.height
+      const ctx = cvs.getContext('2d')!
+      ctx.filter = 'contrast(200%) brightness(80%) grayscale(100%)'
+      ctx.drawImage(img, 0, 0)
+      saveHistory();
+      updateSignature(sigId, { imageUrl: cvs.toDataURL('image/png') })
+      showToast('Signature enhanced')
+    } catch (e) {
+      alert("Enhancement failed.")
+    } finally {
+      setIsProcessing(false)
+      setLoadingText('')
+    }
+  }
+
+  // Miscellaneous Handlers
+  const handleSigImageUpload = (sigId: string, e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      saveHistory();
+      updateSignature(sigId, { imageUrl: URL.createObjectURL(e.target.files![0]), mode: 'image' })
+    }
+  }
+
   const selectAllPages = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.checked) setSelectedPages(pages.map(p => p.id));
     else setSelectedPages([]);
@@ -852,23 +1169,6 @@ export default function PdfEditor() {
     showToast('Page rotated CCW')
   }
 
-  const updatePageAttributes = (id: string, updates: Partial<PageItem>) => {
-    setPages(items => items.map(item => item.id === id ? { ...item, ...updates } : item))
-  }
-
-  const clearAll = () => {
-    saveHistory();
-    setPages([])
-    setOriginalDocName('document')
-    setPreviewPageIndex(0)
-    setSignatures([])
-    setActiveSigId(null)
-    setSelectedPages([])
-    setIsMultiSelectMode(false)
-    setShowViewerGrid(true)
-    showToast('All pages & settings cleared')
-  }
-
   const handlePreview = async () => {
     setFullScreenMode('preview');
     setActivePanel('export');
@@ -881,305 +1181,348 @@ export default function PdfEditor() {
     setFullScreenMode('edit')
   }
 
-  const handleSigImageUpload = (sigId: string, e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      saveHistory();
-      updateSignature(sigId, { imageUrl: URL.createObjectURL(e.target.files![0]), mode: 'image' })
-    }
-  }
 
-  const handleRemovePageBg = async (pageId: string, imageUrl: string) => {
-    if (!imageUrl) return
-    setIsProcessing(true)
-    setLoadingText('Removing Background from Page...')
-    await new Promise(r => setTimeout(r, 50)) 
+  // 8. Output Core (Exports)
+  const renderPageToCanvas = async (page: PageItem, index: number, forPdf = false, skipSignature = false) => {
+    const img = await createImage(page.url)
+    const canvas = document.createElement('canvas')
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
 
-    try {
-      const optimizedDataUrl = await optimizeImageForAI(imageUrl)
-      let removedSuccessfully = false;
+    const isRotated = page.rotation % 180 !== 0
+    const rawWidth = isRotated ? img.height : img.width
+    const rawHeight = isRotated ? img.width : img.height
 
-      if (pageBgModel === 'document-advanced') {
-        try {
-          const cleanedDataUrl = await processDocumentTextExtraction(optimizedDataUrl);
-          saveHistory();
-          updatePageAttributes(pageId, { url: cleanedDataUrl });
-          removedSuccessfully = true;
-        } catch (err) {
-          console.warn("Document text extraction failed", err);
-        }
-      } else if (pageBgModel === 'briaai/RMBG-1.4') {
-        try {
-          const { AutoModel, AutoProcessor, RawImage, env } = await import('@huggingface/transformers');
-          
-          env.allowLocalModels = false; 
-          
-          const model = await AutoModel.from_pretrained(pageBgModel, {
-            config: { model_type: 'custom' } as any,
-          });
+    let targetWidth = rawWidth
+    let targetHeight = rawHeight
 
-          const processor = await AutoProcessor.from_pretrained(pageBgModel, {
-            config: {
-              do_normalize: true, do_pad: false, do_rescale: true, do_resize: true,
-              image_mean: [0.5, 0.5, 0.5], feature_extractor_type: "ImageFeatureExtractor",
-              image_std: [1, 1, 1], resample: 2, rescale_factor: 0.00392156862745098,
-              size: { width: 1024, height: 1024 }
-            } as any
-          });
-
-          const imageToProcess = await RawImage.fromURL(optimizedDataUrl);
-          const { pixel_values } = await processor(imageToProcess);
-          
-          const outputs = await model({ input: pixel_values });
-          const outTensor = Object.values(outputs)[0] as any;
-          
-          if (!outTensor || !outTensor.data) throw new Error("Invalid tensor output");
-
-          const maskWidth = outTensor.dims[3];
-          const maskHeight = outTensor.dims[2];
-
-          const maskCanvas = document.createElement('canvas');
-          maskCanvas.width = maskWidth;
-          maskCanvas.height = maskHeight;
-          const maskCtx = maskCanvas.getContext('2d');
-          if (!maskCtx) throw new Error("Mask Context failed");
-
-          const imgData = maskCtx.createImageData(maskWidth, maskHeight);
-          for (let i = 0; i < outTensor.data.length; i++) {
-             const val = Math.max(0, Math.min(255, Math.round(outTensor.data[i] * 255)));
-             imgData.data[i * 4] = 0;     // R
-             imgData.data[i * 4 + 1] = 0; // G
-             imgData.data[i * 4 + 2] = 0; // B
-             imgData.data[i * 4 + 3] = val; 
-          }
-          maskCtx.putImageData(imgData, 0, 0);
-
-          const originalImg = await createImage(imageUrl);
-          const finalCanvas = document.createElement('canvas');
-          finalCanvas.width = originalImg.width;
-          finalCanvas.height = originalImg.height;
-          const finalCtx = finalCanvas.getContext('2d');
-          if (!finalCtx) throw new Error("Final context failed");
-
-          finalCtx.drawImage(originalImg, 0, 0);
-          finalCtx.globalCompositeOperation = 'destination-in';
-          finalCtx.drawImage(maskCanvas, 0, 0, finalCanvas.width, finalCanvas.height);
-          
-          saveHistory();
-          updatePageAttributes(pageId, { url: finalCanvas.toDataURL('image/png') })
-          removedSuccessfully = true;
-        } catch (hfError) {
-          console.warn("Manual RMBG-1.4 engine failed. Falling back to Imgly...", hfError);
+    let scaleRatio = 1
+    if (forPdf && enableCompression) {
+      const activePPI = ppiMode === 'custom' ? customPPI : Number(ppiMode)
+      if (activePPI > 0) {
+        const maxPixels = 11.7 * activePPI
+        const longestSide = Math.max(targetWidth, targetHeight)
+        if (longestSide > maxPixels) {
+          scaleRatio = maxPixels / longestSide
         }
       }
-
-      if (!removedSuccessfully) {
-        const fallbackModel = pageBgModel === 'briaai/RMBG-1.4' || pageBgModel === 'document-advanced' ? 'isnet' : pageBgModel;
-        const bgConfig: Config = { model: fallbackModel as any, output: { format: "image/png" } }
-        
-        const blob = await removeBackground(imageUrl, bgConfig) 
-        saveHistory();
-        updatePageAttributes(pageId, { url: URL.createObjectURL(blob) })
-      }
-      showToast('Page background removed')
-    } catch (e) {
-      alert("Background removal failed.")
-    } finally {
-      setIsProcessing(false)
-      setLoadingText('')
     }
-  }
 
-  const handleRemoveSigBg = async (sigId: string, imageUrl: string) => {
-    if (!imageUrl) return
-    setIsProcessing(true)
-    setLoadingText('Removing Background...')
-    await new Promise(r => setTimeout(r, 50)) 
+    canvas.width = targetWidth * scaleRatio
+    canvas.height = targetHeight * scaleRatio
 
-    try {
-      const optimizedDataUrl = await optimizeImageForAI(imageUrl)
-      let removedSuccessfully = false;
+    ctx.fillStyle = '#FFFFFF'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
 
-      if (sigBgModel === 'document-advanced') {
-        try {
-          const cleanedDataUrl = await processDocumentTextExtraction(optimizedDataUrl);
-          saveHistory();
-          updateSignature(sigId, { imageUrl: cleanedDataUrl });
-          removedSuccessfully = true;
-        } catch (err) {
-          console.warn("Document text extraction failed", err);
-        }
-      } else if (sigBgModel === 'briaai/RMBG-1.4') {
-        try {
-          const { AutoModel, AutoProcessor, RawImage, env } = await import('@huggingface/transformers');
-          
-          env.allowLocalModels = false; 
-          
-          const model = await AutoModel.from_pretrained(sigBgModel, {
-            config: { model_type: 'custom' } as any,
-          });
+    ctx.translate(canvas.width / 2, canvas.height / 2)
+    ctx.rotate(((page.rotation + page.fineRotation) * Math.PI) / 180)
+    
+    const b = 100 + (page.brightness ?? 0)
+    const c = 100 + (page.contrast ?? 0)
+    const sat = 100 + (page.saturation ?? 0)
+    const hue = page.hue ?? 0
+    const sep = Math.max(0, page.sepia ?? 0)
+    const gray = page.grayscale ? 100 : 0
+    
+    ctx.filter = `brightness(${b}%) contrast(${c}%) saturate(${sat}%) hue-rotate(${hue}deg) grayscale(${gray}%) sepia(${sep}%)`;
 
-          const processor = await AutoProcessor.from_pretrained(sigBgModel, {
-            config: {
-              do_normalize: true, do_pad: false, do_rescale: true, do_resize: true,
-              image_mean: [0.5, 0.5, 0.5], feature_extractor_type: "ImageFeatureExtractor",
-              image_std: [1, 1, 1], resample: 2, rescale_factor: 0.00392156862745098,
-              size: { width: 1024, height: 1024 }
-            } as any
-          });
+    const scaleX = scaleRatio * (page.scale || 1)
+    const scaleY = scaleRatio * (page.scale || 1)
+    ctx.scale(scaleX, scaleY)
+    
+    ctx.drawImage(img, -img.width / 2, -img.height / 2, img.width, img.height)
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+    ctx.filter = 'none'
 
-          const imageToProcess = await RawImage.fromURL(optimizedDataUrl);
-          const { pixel_values } = await processor(imageToProcess);
-          
-          const outputs = await model({ input: pixel_values });
-          const outTensor = Object.values(outputs)[0] as any;
-          
-          if (!outTensor || !outTensor.data) throw new Error("Invalid tensor output");
-
-          const maskWidth = outTensor.dims[3];
-          const maskHeight = outTensor.dims[2];
-
-          const maskCanvas = document.createElement('canvas');
-          maskCanvas.width = maskWidth;
-          maskCanvas.height = maskHeight;
-          const maskCtx = maskCanvas.getContext('2d');
-          if (!maskCtx) throw new Error("Mask Context failed");
-
-          const imgData = maskCtx.createImageData(maskWidth, maskHeight);
-          for (let i = 0; i < outTensor.data.length; i++) {
-             const val = Math.max(0, Math.min(255, Math.round(outTensor.data[i] * 255)));
-             imgData.data[i * 4] = 0;     // R
-             imgData.data[i * 4 + 1] = 0; // G
-             imgData.data[i * 4 + 2] = 0; // B
-             imgData.data[i * 4 + 3] = val; 
-          }
-          maskCtx.putImageData(imgData, 0, 0);
-
-          const originalImg = await createImage(imageUrl);
-          const finalCanvas = document.createElement('canvas');
-          finalCanvas.width = originalImg.width;
-          finalCanvas.height = originalImg.height;
-          const finalCtx = finalCanvas.getContext('2d');
-          if (!finalCtx) throw new Error("Final context failed");
-
-          finalCtx.drawImage(originalImg, 0, 0);
-          finalCtx.globalCompositeOperation = 'destination-in';
-          finalCtx.drawImage(maskCanvas, 0, 0, finalCanvas.width, finalCanvas.height);
-          
-          saveHistory();
-          updateSignature(sigId, { imageUrl: finalCanvas.toDataURL('image/png') })
-          removedSuccessfully = true;
-        } catch (hfError) {
-          console.warn("Manual RMBG-1.4 engine failed. Falling back to Imgly...", hfError);
+    // Clean Scan (Thresholding - Global Only)
+    if (cleanWatermarks) {
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+      const data = imgData.data
+      for (let j = 0; j < data.length; j += 4) {
+        const r = data[j], g = data[j+1], b = data[j+2]
+        if (r > 160 && g > 160 && b > 160) {
+          data[j] = 255; data[j+1] = 255; data[j+2] = 255;
+        } 
+        else if (r < 100 && g < 100 && b < 100) {
+          data[j] = 0; data[j+1] = 0; data[j+2] = 0;
         }
       }
+      ctx.putImageData(imgData, 0, 0)
+    }
 
-      if (!removedSuccessfully) {
-        const fallbackModel = sigBgModel === 'briaai/RMBG-1.4' || sigBgModel === 'document-advanced' ? 'isnet' : sigBgModel;
-        const bgConfig: Config = { model: fallbackModel as any, output: { format: "image/png" } }
-        
-        const blob = await removeBackground(imageUrl, bgConfig) 
-        saveHistory();
-        updateSignature(sigId, { imageUrl: URL.createObjectURL(blob) })
+    // Global Grayscale Compression Override
+    if (forPdf && enableCompression && compressionGrayscale) {
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+      const data = imgData.data
+      for (let j = 0; j < data.length; j += 4) {
+        const luma = data[j] * 0.299 + data[j+1] * 0.587 + data[j+2] * 0.114
+        data[j] = luma; data[j+1] = luma; data[j+2] = luma
       }
-      showToast('Signature background removed')
-    } catch (e) {
-      alert("Background removal failed.")
-    } finally {
-      setIsProcessing(false)
-      setLoadingText('')
+      ctx.putImageData(imgData, 0, 0)
     }
-  }
 
-  const handleEnhanceSig = async (sigId: string, imageUrl: string) => {
-    if (!imageUrl) return
-    setIsProcessing(true)
-    setLoadingText('Enhancing Signature...')
-    await new Promise(r => setTimeout(r, 50))
-
-    try {
-      const img = await createImage(imageUrl)
-      const cvs = document.createElement('canvas')
-      cvs.width = img.width; cvs.height = img.height
-      const ctx = cvs.getContext('2d')!
-      ctx.filter = 'contrast(200%) brightness(80%) grayscale(100%)'
-      ctx.drawImage(img, 0, 0)
-      saveHistory();
-      updateSignature(sigId, { imageUrl: cvs.toDataURL('image/png') })
-      showToast('Signature enhanced')
-    } catch (e) {
-      alert("Enhancement failed.")
-    } finally {
-      setIsProcessing(false)
-      setLoadingText('')
-    }
-  }
-
-  // Drag Placement Handlers
-  const handlePointerDownSig = (e: React.PointerEvent, ctx: 'right' | 'modal', sigId: string) => { 
-    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) {}
-    saveHistory(); 
-    setIsDraggingSig(true); 
-    setDraggingContext(ctx); 
-    setDraggingSigId(sigId); 
-    setActiveSigId(sigId); 
-    setOpenMenuSigId(null);
-  }
-
-  const handlePointerUpSig = () => { 
-    setIsDraggingSig(false); 
-    setDraggingContext(null); 
-    setResizingState(null); 
-    setDraggingSigId(null); 
-  }
-  
-  const handleResizeDown = (e: React.PointerEvent, corner: string, ctx: 'right' | 'modal', sigId: string) => {
-    e.stopPropagation() 
-    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) {}
-    const sig = signatures.find(s => s.id === sigId)
-    if (!sig) return;
-    saveHistory(); 
-    setResizingState({
-      startX: e.clientX,
-      startY: e.clientY,
-      startScale: getSigPlacement(sig, previewPageIndex).scale,
-      corner,
-      sigId
-    })
-    setDraggingContext(ctx)
-    setActiveSigId(sigId)
-    setOpenMenuSigId(null)
-  }
-
-  const handlePointerMoveSig = (e: React.PointerEvent) => {
-    if (!draggingContext) return
-
-    if (resizingState) {
-      const dx = e.clientX - resizingState.startX
-      const dy = e.clientY - resizingState.startY
-      let delta = 0
+    // Manual JS Sharpening for Output Context
+    if ((page.sharpen ?? 0) > 0) {
+      const amount = page.sharpen / 100;
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imgData.data;
+      const w = canvas.width;
+      const h = canvas.height;
+      const copy = new Uint8ClampedArray(data);
+      const k1 = -amount;
+      const k4 = 1 + 4 * amount;
       
-      if (resizingState.corner === 'br') delta = (dx + dy) * 0.2
-      else if (resizingState.corner === 'tl') delta = -(dx + dy) * 0.2
-      else if (resizingState.corner === 'tr') delta = (dx - dy) * 0.2
-      else if (resizingState.corner === 'bl') delta = (-dx + dy) * 0.2
-
-      const newScale = Math.max(10, Math.min(200, resizingState.startScale + delta))
-      updateSigPlacement(resizingState.sigId, previewPageIndex, { scale: newScale })
-      return
+      for (let y = 1; y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+          const px = (y * w + x) * 4;
+          for (let c = 0; c < 3; c++) {
+            const val = 
+              k1 * copy[px - w * 4 + c] +
+              k1 * copy[px - 4 + c] +
+              k4 * copy[px + c] +
+              k1 * copy[px + 4 + c] +
+              k1 * copy[px + w * 4 + c];
+            data[px + c] = val;
+          }
+        }
+      }
+      ctx.putImageData(imgData, 0, 0);
     }
 
-    if (isDraggingSig && draggingSigId) {
-      const ref = draggingContext === 'right' ? rightSideSigRef : modalSigRef
-      if (!ref.current) return
-      const rect = ref.current.getBoundingClientRect()
-      let x = ((e.clientX - rect.left) / rect.width) * 100
-      let y = ((e.clientY - rect.top) / rect.height) * 100
-      x = Math.max(0, Math.min(100, x))
-      y = Math.max(0, Math.min(100, y))
-      updateSigPlacement(draggingSigId, previewPageIndex, { x, y })
+    // Signatures Overlay
+    if (!skipSignature && signatures && signatures.length > 0) {
+      for (const sig of signatures) {
+        if (shouldApplySignature(index, sig.applyMode, sig.customPages)) {
+          const placement = getSigPlacement(sig, index)
+          ctx.save()
+          ctx.globalAlpha = placement.opacity / 100
+          const sigX = (placement.x / 100) * canvas.width
+          const sigY = (placement.y / 100) * canvas.height
+
+          if (sig.mode === 'text' && sig.text) {
+            const fontSize = (placement.scale / 100) * canvas.width * 0.1
+            ctx.font = `${fontSize}px ${sig.font}`
+            ctx.fillStyle = sig.color
+            ctx.textAlign = 'center'
+            ctx.textBaseline = 'middle'
+            ctx.fillText(sig.text, sigX, sigY)
+          } else if (sig.mode === 'image' && sig.imageUrl) {
+            const sigImg = await createImage(sig.imageUrl)
+            const baseSigWidth = canvas.width * 0.3
+            const drawWidth = baseSigWidth * (placement.scale / 50)
+            const drawHeight = (sigImg.height / sigImg.width) * drawWidth
+            ctx.drawImage(sigImg, sigX - drawWidth / 2, sigY - drawHeight / 2, drawWidth, drawHeight)
+          }
+          ctx.restore()
+        }
+      }
+    }
+
+    // Page Numbers
+    if (addPageNumbers) {
+      const fontSize = Math.max(Math.floor(canvas.width / 35), 12)
+      ctx.font = `bold ${fontSize}px sans-serif`
+      ctx.fillStyle = '#000000'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'bottom'
+      ctx.fillText(`${index + 1} / ${pages.length}`, canvas.width / 2, canvas.height - fontSize)
+    }
+
+    // Watermark
+    if (watermarkText) {
+      const fontSize = Math.max(Math.floor(canvas.width / 15), 20)
+      ctx.font = `bold ${fontSize}px sans-serif`
+      ctx.fillStyle = `rgba(150, 150, 150, ${watermarkOpacity / 100})`
+      let x = canvas.width / 2; let y = canvas.height / 2;
+      let align: CanvasTextAlign = 'center'; let baseline: CanvasTextBaseline = 'middle'; let angle = -Math.PI / 4;
+      const padding = fontSize
+
+      if (watermarkPlacement === 'top-left') { x = padding; y = padding; align = 'left'; baseline = 'top'; angle = 0; }
+      else if (watermarkPlacement === 'top-right') { x = canvas.width - padding; y = padding; align = 'right'; baseline = 'top'; angle = 0; }
+      else if (watermarkPlacement === 'bottom-left') { x = padding; y = canvas.height - padding; align = 'left'; baseline = 'bottom'; angle = 0; }
+      else if (watermarkPlacement === 'bottom-right') { x = canvas.width - padding; y = canvas.height - padding; align = 'right'; baseline = 'bottom'; angle = 0; }
+
+      ctx.translate(x, y); ctx.rotate(angle); ctx.textAlign = align; ctx.textBaseline = baseline;
+      ctx.fillText(watermarkText, 0, 0); ctx.setTransform(1, 0, 0, 1, 0, 0);
+    }
+
+    return canvas;
+  }
+
+  const generatePdfBlob = async (pagesToExport: PageItem[] = pages): Promise<Blob | null> => {
+    if (pagesToExport.length === 0) return null
+
+    let pdf: jsPDF | null = null;
+    
+    for (let i = 0; i < pagesToExport.length; i++) {
+      const canvas = await renderPageToCanvas(pagesToExport[i], i, true)
+      if (!canvas) continue
+
+      const orientation = canvas.width > canvas.height ? 'l' : 'p'
+      
+      if (i === 0) {
+        const pdfOptions: any = { orientation, unit: 'px', format: [canvas.width, canvas.height] }
+        if (encryptPassword) {
+          pdfOptions.encryption = { userPassword: encryptPassword, ownerPassword: encryptPassword, userPermissions: ["print", "modify"] }
+        }
+        pdf = new jsPDF(pdfOptions)
+      } else {
+        pdf!.addPage([canvas.width, canvas.height], orientation)
+      }
+
+      const outputQuality = enableCompression ? (compressionQuality / 100) : 0.92
+      const processedData = canvas.toDataURL('image/jpeg', outputQuality)
+      pdf!.addImage(processedData, 'JPEG', 0, 0, canvas.width, canvas.height)
+    }
+    
+    return pdf ? pdf.output('blob') : null
+  }
+
+  const exportAsPdf = async () => {
+    setIsProcessing(true)
+    setLoadingText('Generating PDF...')
+    await new Promise(r => setTimeout(r, 50))
+    try {
+      const blob = await generatePdfBlob()
+      if (blob) {
+        const url = URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = url
+        link.download = `${originalDocName}_zs_converter.pdf`
+        link.click()
+        URL.revokeObjectURL(url)
+        showToast('PDF exported successfully')
+      }
+    } catch (e) {
+      alert("PDF export failed.")
+    } finally {
+      setIsProcessing(false)
+      setLoadingText('')
     }
   }
 
+  const exportAsImages = async () => {
+    setIsProcessing(true)
+    setLoadingText('Generating Image Archive...')
+    await new Promise(r => setTimeout(r, 50))
+    try {
+      const zip = new JSZip()
+      for (let i = 0; i < pages.length; i++) {
+        const canvas = await renderPageToCanvas(pages[i], i, false)
+        if (!canvas) continue
+
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.92)
+        const base64Data = dataUrl.split(',')[1]
+        zip.file(`${originalDocName}_page_${i + 1}.jpg`, base64Data, { base64: true })
+      }
+
+      const zipContent = await zip.generateAsync({ type: 'blob' })
+      const url = URL.createObjectURL(zipContent)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `${originalDocName}_images_zs_converter.zip`
+      link.click()
+      URL.revokeObjectURL(url)
+      showToast('Image archive exported')
+    } catch (e) {
+      alert("Image export failed.")
+    } finally {
+      setIsProcessing(false)
+      setLoadingText('')
+    }
+  }
+
+  const exportAsWord = async () => {
+    setIsProcessing(true)
+    setLoadingText('Building Word Document...')
+    await new Promise(r => setTimeout(r, 50))
+    try {
+      let htmlContent = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+      <head><meta charset='utf-8'><title>Exported Doc</title></head><body>`
+      
+      for (let i = 0; i < pages.length; i++) {
+        const canvas = await renderPageToCanvas(pages[i], i, false)
+        if(!canvas) continue
+        
+        const b64 = canvas.toDataURL('image/jpeg', 0.85)
+        htmlContent += `<img src="${b64}" style="width:100%; max-width:800px; page-break-after:always; display:block; margin-bottom:20px;" />`
+      }
+      
+      htmlContent += `</body></html>`
+      
+      const blob = new Blob(['\ufeff', htmlContent], { type: 'application/msword' })
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(blob)
+      link.download = `${originalDocName}_zs_converter.doc`
+      link.click()
+      showToast('Word document exported')
+    } catch(e) {
+      alert("Word export failed.")
+    } finally {
+      setIsProcessing(false)
+      setLoadingText('')
+    }
+  }
+
+  const handleSplitPdf = async () => {
+    if (!splitRanges.trim()) return alert("Please enter valid page ranges (e.g., 1-3, 5).")
+    
+    setIsProcessing(true)
+    setLoadingText('Splitting PDF...')
+    await new Promise(r => setTimeout(r, 50))
+    try {
+      const ranges = splitRanges.split(',').map(r => r.trim())
+      const zip = new JSZip()
+      
+      for (let i = 0; i < ranges.length; i++) {
+        const rangeStr = ranges[i]
+        const parts = rangeStr.split('-').map(n => parseInt(n, 10))
+        let start = 1, end = 1
+        
+        if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+          start = parts[0]; end = parts[1];
+        } else if (parts.length === 1 && !isNaN(parts[0])) {
+          start = parts[0]; end = parts[0];
+        } else {
+          continue;
+        }
+
+        start = Math.max(1, Math.min(start, pages.length))
+        end = Math.max(1, Math.min(end, pages.length))
+        
+        const actualStart = Math.min(start, end)
+        const actualEnd = Math.max(start, end)
+        
+        const slice = pages.slice(actualStart - 1, actualEnd)
+        if (slice.length > 0) {
+          const splitBlob = await generatePdfBlob(slice)
+          if (splitBlob) {
+            zip.file(`${originalDocName}_split_${actualStart}-${actualEnd}.pdf`, splitBlob)
+          }
+        }
+      }
+      
+      const zipContent = await zip.generateAsync({ type: 'blob' })
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(zipContent)
+      link.download = `${originalDocName}_splits_zs_converter.zip`
+      link.click()
+      showToast('Split PDF downloaded')
+    } catch (e) {
+      alert("Split operation failed. Please check your range formatting.")
+    } finally {
+      setIsProcessing(false)
+      setLoadingText('')
+    }
+  }
+
+  const handleMainExport = () => {
+    if (exportFormat === 'pdf') exportAsPdf()
+    else if (exportFormat === 'images') exportAsImages()
+    else if (exportFormat === 'word') exportAsWord()
+  }
+
+  // 9. Render Helpers
   const renderSignatureOverlay = (ctx: 'right' | 'modal') => {
     if (!signatures || signatures.length === 0) return null;
     const isPreview = fullScreenMode === 'preview';
@@ -1300,7 +1643,6 @@ export default function PdfEditor() {
     )
   }
 
-  // --- PANEL RENDERERS ---
   const renderAccordion = (id: PanelId, label: string, icon: React.ReactNode, content: React.ReactNode) => {
     return (
       <div ref={(el) => { if (id) panelRefs.current[id] = el; }} className={`border border-slate-200 flex-shrink-0 bg-white shadow-sm transition-all relative ${activePanel === id ? 'rounded-lg z-20' : 'rounded-lg z-0 overflow-hidden'}`}>
@@ -1320,17 +1662,17 @@ export default function PdfEditor() {
     const fileBlocks = getFileBlocks();
     
     return (
-      <div className="space-y-4">
-        <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">
+      <div className="space-y-4 flex flex-col h-full">
+        <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold shrink-0">
           Drag to reorder entire files
         </p>
         
         {fileBlocks.length === 0 ? (
-          <p className="text-xs text-slate-400 italic">No files loaded yet.</p>
+          <p className="text-xs text-slate-400 italic shrink-0">No files loaded yet.</p>
         ) : (
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleBlockDragEnd}>
             <SortableContext items={fileBlocks.map(b => b.id)} strategy={rectSortingStrategy}>
-              <div className="max-h-[300px] overflow-y-auto custom-scrollbar pr-1">
+              <div className="flex-1 overflow-y-auto custom-scrollbar pr-1 pb-4">
                 {fileBlocks.map((block, i) => (
                   <SortableFileBlock key={block.id} block={block} index={i} />
                 ))}
@@ -1763,7 +2105,6 @@ export default function PdfEditor() {
   const renderSidebarAccordions = (isForFullscreen: boolean) => {
     return (
       <div className="space-y-3">
-        {pages.length > 0 && !isForFullscreen && renderAccordion('organizer', 'File Order', <Layers className="w-4 h-4 text-[#6384A3]"/>, renderFileOrganizerControls())}
         {!isForFullscreen && renderAccordion('merge', 'Merge Documents', <Plus className="w-4 h-4 text-[#6384A3]"/>, renderMergeControls())}
         {!isForFullscreen && renderAccordion('split', 'Split Document', <Scissors className="w-4 h-4 text-[#6384A3]"/>, renderSplitControls())}
         
@@ -1780,347 +2121,7 @@ export default function PdfEditor() {
     )
   }
 
-  // --- CORE CANVAS RENDERING FOR EXPORT ---
-  const renderPageToCanvas = async (page: PageItem, index: number, forPdf = false, skipSignature = false) => {
-    const img = await createImage(page.url)
-    const canvas = document.createElement('canvas')
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return null
-
-    const isRotated = page.rotation % 180 !== 0
-    const rawWidth = isRotated ? img.height : img.width
-    const rawHeight = isRotated ? img.width : img.height
-
-    let targetWidth = rawWidth
-    let targetHeight = rawHeight
-
-    let scaleRatio = 1
-    if (forPdf && enableCompression) {
-      const activePPI = ppiMode === 'custom' ? customPPI : Number(ppiMode)
-      if (activePPI > 0) {
-        const maxPixels = 11.7 * activePPI
-        const longestSide = Math.max(targetWidth, targetHeight)
-        if (longestSide > maxPixels) {
-          scaleRatio = maxPixels / longestSide
-        }
-      }
-    }
-
-    canvas.width = targetWidth * scaleRatio
-    canvas.height = targetHeight * scaleRatio
-
-    ctx.fillStyle = '#FFFFFF'
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
-
-    ctx.translate(canvas.width / 2, canvas.height / 2)
-    ctx.rotate(((page.rotation + page.fineRotation) * Math.PI) / 180)
-    
-    const b = 100 + (page.brightness ?? 0)
-    const c = 100 + (page.contrast ?? 0)
-    const sat = 100 + (page.saturation ?? 0)
-    const hue = page.hue ?? 0
-    const sep = Math.max(0, page.sepia ?? 0)
-    const gray = page.grayscale ? 100 : 0
-    
-    ctx.filter = `brightness(${b}%) contrast(${c}%) saturate(${sat}%) hue-rotate(${hue}deg) grayscale(${gray}%) sepia(${sep}%)`;
-
-    const scaleX = scaleRatio * (page.scale || 1)
-    const scaleY = scaleRatio * (page.scale || 1)
-    ctx.scale(scaleX, scaleY)
-    
-    ctx.drawImage(img, -img.width / 2, -img.height / 2, img.width, img.height)
-    ctx.setTransform(1, 0, 0, 1, 0, 0)
-    ctx.filter = 'none'
-
-    // Clean Scan (Thresholding - Global Only)
-    if (cleanWatermarks) {
-      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-      const data = imgData.data
-      for (let j = 0; j < data.length; j += 4) {
-        const r = data[j], g = data[j+1], b = data[j+2]
-        if (r > 160 && g > 160 && b > 160) {
-          data[j] = 255; data[j+1] = 255; data[j+2] = 255;
-        } 
-        else if (r < 100 && g < 100 && b < 100) {
-          data[j] = 0; data[j+1] = 0; data[j+2] = 0;
-        }
-      }
-      ctx.putImageData(imgData, 0, 0)
-    }
-
-    // Global Grayscale Compression Override
-    if (forPdf && enableCompression && compressionGrayscale) {
-      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-      const data = imgData.data
-      for (let j = 0; j < data.length; j += 4) {
-        const luma = data[j] * 0.299 + data[j+1] * 0.587 + data[j+2] * 0.114
-        data[j] = luma; data[j+1] = luma; data[j+2] = luma
-      }
-      ctx.putImageData(imgData, 0, 0)
-    }
-
-    // Manual JS Sharpening for Output Context
-    if ((page.sharpen ?? 0) > 0) {
-      const amount = page.sharpen / 100;
-      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const data = imgData.data;
-      const w = canvas.width;
-      const h = canvas.height;
-      const copy = new Uint8ClampedArray(data);
-      const k1 = -amount;
-      const k4 = 1 + 4 * amount;
-      
-      for (let y = 1; y < h - 1; y++) {
-        for (let x = 1; x < w - 1; x++) {
-          const px = (y * w + x) * 4;
-          for (let c = 0; c < 3; c++) {
-            const val = 
-              k1 * copy[px - w * 4 + c] +
-              k1 * copy[px - 4 + c] +
-              k4 * copy[px + c] +
-              k1 * copy[px + 4 + c] +
-              k1 * copy[px + w * 4 + c];
-            data[px + c] = val;
-          }
-        }
-      }
-      ctx.putImageData(imgData, 0, 0);
-    }
-
-    // Signatures Overlay
-    if (!skipSignature && signatures && signatures.length > 0) {
-      for (const sig of signatures) {
-        if (shouldApplySignature(index, sig.applyMode, sig.customPages)) {
-          const placement = getSigPlacement(sig, index)
-          ctx.save()
-          ctx.globalAlpha = placement.opacity / 100
-          const sigX = (placement.x / 100) * canvas.width
-          const sigY = (placement.y / 100) * canvas.height
-
-          if (sig.mode === 'text' && sig.text) {
-            const fontSize = (placement.scale / 100) * canvas.width * 0.1
-            ctx.font = `${fontSize}px ${sig.font}`
-            ctx.fillStyle = sig.color
-            ctx.textAlign = 'center'
-            ctx.textBaseline = 'middle'
-            ctx.fillText(sig.text, sigX, sigY)
-          } else if (sig.mode === 'image' && sig.imageUrl) {
-            const sigImg = await createImage(sig.imageUrl)
-            const baseSigWidth = canvas.width * 0.3
-            const drawWidth = baseSigWidth * (placement.scale / 50)
-            const drawHeight = (sigImg.height / sigImg.width) * drawWidth
-            ctx.drawImage(sigImg, sigX - drawWidth / 2, sigY - drawHeight / 2, drawWidth, drawHeight)
-          }
-          ctx.restore()
-        }
-      }
-    }
-
-    // Page Numbers
-    if (addPageNumbers) {
-      const fontSize = Math.max(Math.floor(canvas.width / 35), 12)
-      ctx.font = `bold ${fontSize}px sans-serif`
-      ctx.fillStyle = '#000000'
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'bottom'
-      ctx.fillText(`${index + 1} / ${pages.length}`, canvas.width / 2, canvas.height - fontSize)
-    }
-
-    // Watermark
-    if (watermarkText) {
-      const fontSize = Math.max(Math.floor(canvas.width / 15), 20)
-      ctx.font = `bold ${fontSize}px sans-serif`
-      ctx.fillStyle = `rgba(150, 150, 150, ${watermarkOpacity / 100})`
-      let x = canvas.width / 2; let y = canvas.height / 2;
-      let align: CanvasTextAlign = 'center'; let baseline: CanvasTextBaseline = 'middle'; let angle = -Math.PI / 4;
-      const padding = fontSize
-
-      if (watermarkPlacement === 'top-left') { x = padding; y = padding; align = 'left'; baseline = 'top'; angle = 0; }
-      else if (watermarkPlacement === 'top-right') { x = canvas.width - padding; y = padding; align = 'right'; baseline = 'top'; angle = 0; }
-      else if (watermarkPlacement === 'bottom-left') { x = padding; y = canvas.height - padding; align = 'left'; baseline = 'bottom'; angle = 0; }
-      else if (watermarkPlacement === 'bottom-right') { x = canvas.width - padding; y = canvas.height - padding; align = 'right'; baseline = 'bottom'; angle = 0; }
-
-      ctx.translate(x, y); ctx.rotate(angle); ctx.textAlign = align; ctx.textBaseline = baseline;
-      ctx.fillText(watermarkText, 0, 0); ctx.setTransform(1, 0, 0, 1, 0, 0);
-    }
-
-    return canvas;
-  }
-
-  // --- EXPORT LOGIC ---
-  const generatePdfBlob = async (pagesToExport: PageItem[] = pages): Promise<Blob | null> => {
-    if (pagesToExport.length === 0) return null
-
-    let pdf: jsPDF | null = null;
-    
-    for (let i = 0; i < pagesToExport.length; i++) {
-      const canvas = await renderPageToCanvas(pagesToExport[i], i, true)
-      if (!canvas) continue
-
-      const orientation = canvas.width > canvas.height ? 'l' : 'p'
-      
-      if (i === 0) {
-        const pdfOptions: any = { orientation, unit: 'px', format: [canvas.width, canvas.height] }
-        if (encryptPassword) {
-          pdfOptions.encryption = { userPassword: encryptPassword, ownerPassword: encryptPassword, userPermissions: ["print", "modify"] }
-        }
-        pdf = new jsPDF(pdfOptions)
-      } else {
-        pdf!.addPage([canvas.width, canvas.height], orientation)
-      }
-
-      const outputQuality = enableCompression ? (compressionQuality / 100) : 0.92
-      const processedData = canvas.toDataURL('image/jpeg', outputQuality)
-      pdf!.addImage(processedData, 'JPEG', 0, 0, canvas.width, canvas.height)
-    }
-    
-    return pdf ? pdf.output('blob') : null
-  }
-
-  const exportAsPdf = async () => {
-    setIsProcessing(true)
-    setLoadingText('Generating PDF...')
-    await new Promise(r => setTimeout(r, 50))
-    try {
-      const blob = await generatePdfBlob()
-      if (blob) {
-        const url = URL.createObjectURL(blob)
-        const link = document.createElement('a')
-        link.href = url
-        link.download = `${originalDocName}_zs_converter.pdf`
-        link.click()
-        URL.revokeObjectURL(url)
-        showToast('PDF exported successfully')
-      }
-    } catch (e) {
-      alert("PDF export failed.")
-    } finally {
-      setIsProcessing(false)
-      setLoadingText('')
-    }
-  }
-
-  const exportAsImages = async () => {
-    setIsProcessing(true)
-    setLoadingText('Generating Image Archive...')
-    await new Promise(r => setTimeout(r, 50))
-    try {
-      const zip = new JSZip()
-      for (let i = 0; i < pages.length; i++) {
-        const canvas = await renderPageToCanvas(pages[i], i, false)
-        if (!canvas) continue
-
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.92)
-        const base64Data = dataUrl.split(',')[1]
-        zip.file(`${originalDocName}_page_${i + 1}.jpg`, base64Data, { base64: true })
-      }
-
-      const zipContent = await zip.generateAsync({ type: 'blob' })
-      const url = URL.createObjectURL(zipContent)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `${originalDocName}_images_zs_converter.zip`
-      link.click()
-      URL.revokeObjectURL(url)
-      showToast('Image archive exported')
-    } catch (e) {
-      alert("Image export failed.")
-    } finally {
-      setIsProcessing(false)
-      setLoadingText('')
-    }
-  }
-
-  const exportAsWord = async () => {
-    setIsProcessing(true)
-    setLoadingText('Building Word Document...')
-    await new Promise(r => setTimeout(r, 50))
-    try {
-      let htmlContent = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
-      <head><meta charset='utf-8'><title>Exported Doc</title></head><body>`
-      
-      for (let i = 0; i < pages.length; i++) {
-        const canvas = await renderPageToCanvas(pages[i], i, false)
-        if(!canvas) continue
-        
-        const b64 = canvas.toDataURL('image/jpeg', 0.85)
-        htmlContent += `<img src="${b64}" style="width:100%; max-width:800px; page-break-after:always; display:block; margin-bottom:20px;" />`
-      }
-      
-      htmlContent += `</body></html>`
-      
-      const blob = new Blob(['\ufeff', htmlContent], { type: 'application/msword' })
-      const link = document.createElement('a')
-      link.href = URL.createObjectURL(blob)
-      link.download = `${originalDocName}_zs_converter.doc`
-      link.click()
-      showToast('Word document exported')
-    } catch(e) {
-      alert("Word export failed.")
-    } finally {
-      setIsProcessing(false)
-      setLoadingText('')
-    }
-  }
-
-  const handleSplitPdf = async () => {
-    if (!splitRanges.trim()) return alert("Please enter valid page ranges (e.g., 1-3, 5).")
-    
-    setIsProcessing(true)
-    setLoadingText('Splitting PDF...')
-    await new Promise(r => setTimeout(r, 50))
-    try {
-      const ranges = splitRanges.split(',').map(r => r.trim())
-      const zip = new JSZip()
-      
-      for (let i = 0; i < ranges.length; i++) {
-        const rangeStr = ranges[i]
-        const parts = rangeStr.split('-').map(n => parseInt(n, 10))
-        let start = 1, end = 1
-        
-        if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-          start = parts[0]; end = parts[1];
-        } else if (parts.length === 1 && !isNaN(parts[0])) {
-          start = parts[0]; end = parts[0];
-        } else {
-          continue;
-        }
-
-        start = Math.max(1, Math.min(start, pages.length))
-        end = Math.max(1, Math.min(end, pages.length))
-        
-        const actualStart = Math.min(start, end)
-        const actualEnd = Math.max(start, end)
-        
-        const slice = pages.slice(actualStart - 1, actualEnd)
-        if (slice.length > 0) {
-          const splitBlob = await generatePdfBlob(slice)
-          if (splitBlob) {
-            zip.file(`${originalDocName}_split_${actualStart}-${actualEnd}.pdf`, splitBlob)
-          }
-        }
-      }
-      
-      const zipContent = await zip.generateAsync({ type: 'blob' })
-      const link = document.createElement('a')
-      link.href = URL.createObjectURL(zipContent)
-      link.download = `${originalDocName}_splits_zs_converter.zip`
-      link.click()
-      showToast('Split PDF downloaded')
-    } catch (e) {
-      alert("Split operation failed. Please check your range formatting.")
-    } finally {
-      setIsProcessing(false)
-      setLoadingText('')
-    }
-  }
-
-  const handleMainExport = () => {
-    if (exportFormat === 'pdf') exportAsPdf()
-    else if (exportFormat === 'images') exportAsImages()
-    else if (exportFormat === 'word') exportAsWord()
-  }
-
+  // 10. Main JSX Return
   return (
     <>
       {/* SVG Filters (Global defs for CSS Sharpening) */}
@@ -2148,7 +2149,7 @@ export default function PdfEditor() {
 
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col lg:flex-row h-auto lg:h-[650px] min-h-[650px]">
         
-        {/* Sidebar Settings */}
+        {/* Left Sidebar Settings */}
         <div className="w-full lg:w-80 h-auto lg:h-full flex flex-col bg-slate-50 border-b lg:border-b-0 lg:border-r border-slate-200 order-2 lg:order-1 relative">
           <div className="p-4 lg:p-6 pb-2 border-b border-slate-200 flex-shrink-0 z-10 bg-slate-50 flex items-center justify-between">
             <h4 className="text-xs font-bold text-slate-800 uppercase tracking-widest flex items-center gap-2">
@@ -2159,12 +2160,23 @@ export default function PdfEditor() {
             </button>
           </div>
 
-          <div className="space-y-3 flex-1 overflow-y-auto p-4 lg:p-6 pt-4 pb-4">
+          <div className="space-y-3 flex-1 overflow-y-auto p-4 lg:p-6 pt-4 pb-4 custom-scrollbar">
             {renderSidebarAccordions(false)}
           </div>
 
-          {/* Global Actions (Sticky Bottom) */}
+          {/* Memory Health Bar & Global Actions (Sticky Bottom) */}
           <div className="p-4 lg:p-6 border-t border-slate-200 flex-shrink-0 z-10 bg-slate-50">
+            <div className="mb-4">
+              <div className="flex justify-between text-[9px] font-bold uppercase tracking-widest text-slate-500 mb-1">
+                <span>Memory Capacity</span>
+                <span className={memoryPercentage > 80 ? 'text-red-500' : ''}>{pages.length} / {maxPagesLimit}</span>
+              </div>
+              <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                <div className={`h-full transition-all ${memoryPercentage > 80 ? 'bg-red-500' : 'bg-emerald-500'}`} style={{ width: `${memoryPercentage}%` }}></div>
+              </div>
+              {memoryPercentage > 80 && <p className="text-[8px] text-red-500 mt-1.5 leading-tight">Nearing capacity. Adding more files may cause browser instability.</p>}
+            </div>
+
             <div className="flex gap-2">
               <button onClick={handlePreview} disabled={isProcessing || pages.length === 0} className="flex-[0.5] py-2.5 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 disabled:opacity-50 transition-colors flex items-center justify-center shadow-sm" title="Preview File">
                 <Eye className="w-4 h-4" />
@@ -2176,7 +2188,7 @@ export default function PdfEditor() {
           </div>
         </div>
 
-        {/* Main Grid / Preview Area */}
+        {/* Center Grid / Preview Area */}
         <div className="flex-1 overflow-hidden relative touch-none w-full h-full flex items-center justify-center bg-slate-100 order-1 lg:order-2">
           {pages.length === 0 ? (
             <div className="p-4 lg:p-8 w-full h-full flex flex-col">
@@ -2273,6 +2285,13 @@ export default function PdfEditor() {
                           </button>
                         </div>
                       )}
+                      
+                      {!showFileSerial && (
+                        <button onClick={() => setShowFileSerial(true)} className="text-[10px] font-bold text-[#6384A3] hover:text-[#4f6a83] uppercase tracking-widest transition-colors flex items-center gap-1 bg-white border border-slate-200 shadow-sm px-3 py-1.5 rounded mr-2">
+                          <Layers className="w-3.5 h-3.5" /> Show File List
+                        </button>
+                      )}
+
                       <button onClick={clearAll} className="text-[10px] font-bold text-red-500 hover:text-red-700 uppercase tracking-widest transition-colors flex items-center gap-1">
                         <Trash2 className="w-3 h-3" /> Clear All
                       </button>
@@ -2280,7 +2299,7 @@ export default function PdfEditor() {
                   </div>
                   <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
                     <SortableContext items={pages.map(p => p.id)} strategy={rectSortingStrategy}>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 lg:gap-6 pb-6">
+                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 lg:gap-6 pb-6">
                         {pages.map((page, index) => (
                           <SortablePageItem 
                             key={page.id} 
@@ -2406,6 +2425,24 @@ export default function PdfEditor() {
             </>
           )}
         </div>
+
+        {/* Right Sidebar - File Serial Organizer */}
+        {pages.length > 0 && showFileSerial && (
+          <div className="w-full lg:w-[220px] h-auto lg:h-full flex flex-col bg-slate-50 border-t lg:border-t-0 lg:border-l border-slate-200 order-3 relative transition-all duration-300 animate-in slide-in-from-right-8">
+            <div className="p-4 pb-2 border-b border-slate-200 flex-shrink-0 z-10 bg-slate-50 flex items-center justify-between">
+              <h4 className="text-[10px] font-bold text-slate-800 uppercase tracking-widest flex items-center gap-1.5">
+                <Layers className="w-3.5 h-3.5" /> File Serial
+              </h4>
+              <button onClick={() => setShowFileSerial(false)} className="p-1 text-slate-400 hover:text-slate-800 hover:bg-slate-200 rounded transition-colors" title="Hide File List">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-3 flex-1 overflow-y-auto custom-scrollbar">
+              {renderFileOrganizerControls()}
+            </div>
+          </div>
+        )}
+
       </div>
 
       {/* Fullscreen Editor / Universal Workspace Mode */}
