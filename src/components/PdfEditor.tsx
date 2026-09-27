@@ -128,6 +128,8 @@ const processDocumentTextExtraction = async (imageUrl: string): Promise<string> 
 // --- DATA STRUCTURES & FILTERS ---
 type PageItem = { 
   id: string; 
+  fileId: string;
+  fileName: string;
   url: string; 
   originalUrl: string; 
   isLossless: boolean; 
@@ -143,6 +145,14 @@ type PageItem = {
   sharpen: number;
 }
 
+type FileBlock = {
+  id: string;
+  fileId: string;
+  fileName: string;
+  pageIds: string[];
+  startIndex: number;
+}
+
 const getFilterString = (page: PageItem) => {
   const b = 100 + (page.brightness ?? 0);
   const c = 100 + (page.contrast ?? 0);
@@ -155,7 +165,35 @@ const getFilterString = (page: PageItem) => {
   return `${s}brightness(${b}%) contrast(${c}%) saturate(${sat}%) hue-rotate(${hue}deg) grayscale(${gray}%) sepia(${sep}%)`.trim();
 }
 
-// --- SORTABLE GRID ITEM ---
+// --- SORTABLE GRID ITEM (FILES) ---
+function SortableFileBlock({ block, index }: { block: FileBlock, index: number }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: block.id });
+  const style = { transform: CSS.Transform.toString(transform), transition, zIndex: isDragging ? 50 : 1 };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      className={`flex items-center justify-between p-3 mb-2 rounded border bg-white cursor-grab hover:border-[#6384A3] transition-all ${isDragging ? 'shadow-lg border-[#6384A3] opacity-80 scale-105' : 'border-slate-200 shadow-sm'}`}
+    >
+      <div className="flex flex-col overflow-hidden">
+        <span className="text-xs font-bold text-slate-700 truncate block">
+          {index + 1}. {block.fileName}
+        </span>
+        <span className="text-[10px] text-slate-500">
+          {block.pageIds.length} {block.pageIds.length === 1 ? 'page' : 'pages'}
+        </span>
+      </div>
+      <div className="text-slate-400">
+        <Layers className="w-4 h-4" />
+      </div>
+    </div>
+  );
+}
+
+// --- SORTABLE GRID ITEM (PAGES) ---
 interface SortableItemProps {
   id: string
   url: string
@@ -335,7 +373,7 @@ type SignatureItem = {
   placements: Record<number, SigPlacement>; 
 }
 
-type PanelId = 'security' | 'overlays' | 'compression' | 'merge' | 'split' | 'enhance' | 'signature' | 'export' | 'page-edit' | null;
+type PanelId = 'organizer' | 'security' | 'overlays' | 'compression' | 'merge' | 'split' | 'enhance' | 'signature' | 'export' | 'page-edit' | null;
 type FullScreenMode = 'edit' | 'preview' | null;
 
 export default function PdfEditor() {
@@ -365,7 +403,7 @@ export default function PdfEditor() {
       }, 150)
     }
 
-    if (activePanel === 'merge' || activePanel === 'split') {
+    if (activePanel === 'merge' || activePanel === 'split' || activePanel === 'organizer') {
       setShowViewerGrid(true);
     } else if (activePanel === 'page-edit' || activePanel === 'signature') {
       setShowViewerGrid(false);
@@ -471,6 +509,56 @@ export default function PdfEditor() {
     });
   }, [showToast]);
 
+  // --- FILE BLOCKS FOR SERIALIZATION & REORDERING ---
+  const getFileBlocks = useCallback((): FileBlock[] => {
+    const blocks: FileBlock[] = [];
+    let currentBlock: FileBlock | null = null;
+
+    pages.forEach((page, index) => {
+      if (!currentBlock || currentBlock.fileId !== page.fileId) {
+        if (currentBlock) blocks.push(currentBlock);
+        currentBlock = {
+          id: `block-${page.fileId}-${index}`, // Unique ID for DndKit
+          fileId: page.fileId,
+          fileName: page.fileName,
+          pageIds: [page.id],
+          startIndex: index,
+        };
+      } else {
+        currentBlock.pageIds.push(page.id);
+      }
+    });
+
+    if (currentBlock) blocks.push(currentBlock);
+    return blocks;
+  }, [pages]);
+
+  const handleBlockDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (over && active.id !== over.id) {
+      const blocks = getFileBlocks();
+      const oldIndex = blocks.findIndex((b) => b.id === active.id);
+      const newIndex = blocks.findIndex((b) => b.id === over.id);
+
+      if (oldIndex !== -1 && newIndex !== -1) {
+        saveHistory();
+        
+        const reorderedBlocks = arrayMove(blocks, oldIndex, newIndex);
+        
+        const newPagesOrder: PageItem[] = [];
+        reorderedBlocks.forEach(block => {
+          block.pageIds.forEach(pageId => {
+            const page = pages.find(p => p.id === pageId);
+            if (page) newPagesOrder.push(page);
+          });
+        });
+
+        setPages(newPagesOrder);
+        showToast('Files reordered');
+      }
+    }
+  };
+
   // --- COMPRESSION SIZE ESTIMATOR ---
   useEffect(() => {
     if (activePanel === 'compression' && pages.length > 0) {
@@ -479,8 +567,9 @@ export default function PdfEditor() {
         try {
           let origBytes = 0;
           for (const p of pages) {
-            if (p.url.startsWith('data:')) {
-              origBytes += p.url.length * 0.75;
+            if (p.url.startsWith('data:') || p.url.startsWith('blob:')) {
+               // Roughly estimate size based on generic page weight if we can't measure perfectly
+               origBytes += 1024 * 1024;
             } else {
               try {
                 const res = await fetch(p.url);
@@ -608,6 +697,7 @@ export default function PdfEditor() {
     return pagesToApply.has(pageIndex);
   }, [])
 
+  // --- MEMORY OPTIMIZED DROP HANDLER ---
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return
     setIsProcessing(true)
@@ -622,6 +712,8 @@ export default function PdfEditor() {
       const newPages: PageItem[] = []
 
       for (const file of acceptedFiles) {
+        const currentFileId = `file-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+
         if (file.type === 'application/pdf') {
           setLoadingText(`Extracting ${file.name}...`)
           await new Promise(r => setTimeout(r, 50))
@@ -641,7 +733,8 @@ export default function PdfEditor() {
           
           for (let i = 1; i <= pdf.numPages; i++) {
             const page = await pdf.getPage(i)
-            const viewport = page.getViewport({ scale: 2.0 })
+            // Memory Fix 1: Render at 1.0 scale to avoid JS heap crash
+            const viewport = page.getViewport({ scale: 1.0 })
             const canvas = document.createElement('canvas')
             const context = canvas.getContext('2d')
             if (!context) continue
@@ -651,10 +744,18 @@ export default function PdfEditor() {
 
             await page.render({ canvasContext: context, viewport } as any).promise
             
-            const dataUrl = canvas.toDataURL('image/png')
+            // Memory Fix 2: Use Blobs to store image outside JS heap
+            const objectUrl = await new Promise<string>((resolve) => {
+               canvas.toBlob((blob) => {
+                  resolve(URL.createObjectURL(blob!));
+               }, 'image/jpeg', 0.9);
+            });
+
             newPages.push({
               id: `pdf-page-${Date.now()}-${Math.random()}`,
-              url: dataUrl, originalUrl: dataUrl, isLossless: true,
+              fileId: currentFileId,
+              fileName: file.name,
+              url: objectUrl, originalUrl: objectUrl, isLossless: false,
               rotation: 0, fineRotation: 0, scale: 1, brightness: 0, contrast: 0,
               saturation: 0, hue: 0, sepia: 0, grayscale: false, sharpen: 0
             })
@@ -665,6 +766,8 @@ export default function PdfEditor() {
           const objectUrl = URL.createObjectURL(file)
           newPages.push({
             id: `image-${file.name}-${Date.now()}`,
+            fileId: currentFileId,
+            fileName: file.name,
             url: objectUrl, originalUrl: objectUrl, isLossless: file.type === 'image/png' || file.type === 'image/webp',
             rotation: 0, fineRotation: 0, scale: 1, brightness: 0, contrast: 0,
             saturation: 0, hue: 0, sepia: 0, grayscale: false, sharpen: 0
@@ -1213,6 +1316,32 @@ export default function PdfEditor() {
     )
   }
 
+  const renderFileOrganizerControls = () => {
+    const fileBlocks = getFileBlocks();
+    
+    return (
+      <div className="space-y-4">
+        <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">
+          Drag to reorder entire files
+        </p>
+        
+        {fileBlocks.length === 0 ? (
+          <p className="text-xs text-slate-400 italic">No files loaded yet.</p>
+        ) : (
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleBlockDragEnd}>
+            <SortableContext items={fileBlocks.map(b => b.id)} strategy={rectSortingStrategy}>
+              <div className="max-h-[300px] overflow-y-auto custom-scrollbar pr-1">
+                {fileBlocks.map((block, i) => (
+                  <SortableFileBlock key={block.id} block={block} index={i} />
+                ))}
+              </div>
+            </SortableContext>
+          </DndContext>
+        )}
+      </div>
+    );
+  };
+
   const renderMergeControls = () => (
     <div className="space-y-4">
       <p className="text-xs text-slate-500">Upload multiple PDFs or images to seamlessly append them to your current document.</p>
@@ -1220,7 +1349,7 @@ export default function PdfEditor() {
         onClick={() => document.getElementById('merge-file-upload')?.click()} 
         className="w-full py-2.5 bg-white border-2 border-dashed border-slate-300 text-slate-600 hover:border-[#6384A3] hover:text-[#6384A3] font-bold text-xs uppercase tracking-widest rounded-lg transition-colors flex items-center justify-center gap-2"
       >
-        + Add Files to Merge
+        <Plus className="w-4 h-4" /> Add Files to Merge
       </button>
       <input type="file" id="merge-file-upload" multiple accept=".pdf,image/jpeg,image/png,image/webp" className="hidden" 
         onChange={(e) => {
@@ -1634,7 +1763,8 @@ export default function PdfEditor() {
   const renderSidebarAccordions = (isForFullscreen: boolean) => {
     return (
       <div className="space-y-3">
-        {!isForFullscreen && renderAccordion('merge', 'Merge Documents', <Layers className="w-4 h-4 text-[#6384A3]"/>, renderMergeControls())}
+        {pages.length > 0 && !isForFullscreen && renderAccordion('organizer', 'File Order', <Layers className="w-4 h-4 text-[#6384A3]"/>, renderFileOrganizerControls())}
+        {!isForFullscreen && renderAccordion('merge', 'Merge Documents', <Plus className="w-4 h-4 text-[#6384A3]"/>, renderMergeControls())}
         {!isForFullscreen && renderAccordion('split', 'Split Document', <Scissors className="w-4 h-4 text-[#6384A3]"/>, renderSplitControls())}
         
         {pages.length > 0 && renderAccordion('page-edit', 'Page Settings', <Edit3 className="w-4 h-4 text-[#6384A3]"/>, renderPageEditControls())}

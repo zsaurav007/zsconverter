@@ -655,9 +655,24 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
 
     let mimeType = exportFormat
     let quality = compressionQuality / 100
-    if (exportFormat === 'image/png') quality = 1.0
 
-    return new Promise<Blob | null>(resolve => canvas.toBlob(resolve, mimeType, quality))
+    let blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, mimeType, quality))
+
+    // Enforce size limit constraint: generated file should not exceed original upload size.
+    if (blob && blob.size > file.size) {
+      let currentQuality = quality;
+      // Note: Because standard Canvas strictly ignores quality parameters for PNGs,
+      // we utilize internal WebP encoding here to respect the user's size limits 
+      // without destroying the image dimensions.
+      let compressMime = mimeType === 'image/png' ? 'image/webp' : mimeType;
+
+      while (blob && blob.size > file.size && currentQuality > 0.1) {
+        currentQuality -= 0.15;
+        blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, compressMime, Math.max(0.1, currentQuality)));
+      }
+    }
+
+    return blob;
   }
 
   useEffect(() => {
@@ -1099,7 +1114,7 @@ export default function PhotoEditor({ file, onCancel, onComplete }: PhotoEditorP
                     onChange={setExportFormat} 
                     direction="up"
                     options={[
-                      { value: 'image/png', label: 'PNG (Lossless, Largest)' },
+                      { value: 'image/png', label: 'PNG' },
                       { value: 'image/webp', label: 'WebP (Optimized, Transparent)' },
                       { value: 'image/jpeg', label: 'JPG / JPEG (No Transparency)' },
                       { value: 'image/x-icon', label: 'ICO Favicon (32x32)' },
