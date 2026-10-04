@@ -13,8 +13,10 @@ const BatchProcessor = dynamic(() => import('@/components/BatchProcessor'), { ss
 const AiConverter = dynamic(() => import('@/components/AiConverter'), { ssr: false })
 const QrGenerator = dynamic(() => import('@/components/QrGenerator'), { ssr: false })
 const PaletteExtractor = dynamic(() => import('@/components/PaletteExtractor'), { ssr: false })
+const BijoyConverter = dynamic(() => import('@/components/bijoy'), { ssr: false })
+const UniversalConverter = dynamic(() => import('@/components/converter'), { ssr: false })
 
-type AppMode = 'image' | 'pdf' | 'batch' | 'ai' | 'qr' | 'palette' | 'pdfToExcel'
+type AppMode = 'image' | 'pdf' | 'batch' | 'ai' | 'qr' | 'palette' | 'pdfToExcel' | 'bijoy' | 'converter'
 
 export default function Home() {
   const [appMode, setAppMode] = useState<AppMode>('image')
@@ -39,6 +41,8 @@ export default function Home() {
     { value: 'batch', label: 'Batch Processor' },
     { value: 'pdf', label: 'PDF Tools' },
     { value: 'pdfToExcel', label: 'PDF to Excel' },
+    { value: 'bijoy', label: 'Unicode / Bijoy' },
+    { value: 'converter', label: 'Converter' },
     { value: 'ai', label: 'AI Converter' },
     { value: 'palette', label: 'Color Palette' },
     { value: 'qr', label: 'QR Code' }
@@ -69,7 +73,7 @@ export default function Home() {
 
           <div className="relative w-full max-w-full mx-auto flex flex-col items-center">
             
-            {/* Mobile Nav: Dropdown (Visible only on small screens) */}
+            {/* Mobile Nav: Dropdown */}
             <div className="w-full max-w-xs sm:hidden relative z-[100]">
               <CustomDropdown
                 value={appMode}
@@ -79,7 +83,7 @@ export default function Home() {
               />
             </div>
 
-            {/* Desktop Nav: Button Row (Visible only on sm and larger screens) */}
+            {/* Desktop Nav: Button Row */}
             <div className="hidden sm:inline-flex flex-wrap justify-center bg-slate-200/50 p-1 rounded-lg gap-1 max-w-full shadow-inner">
               <button 
                 onClick={() => setAppMode('image')} 
@@ -104,6 +108,18 @@ export default function Home() {
                 className={`flex-shrink-0 px-4 py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'pdfToExcel' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
               >
                 PDF to Excel
+              </button>
+              <button 
+                onClick={() => setAppMode('bijoy')} 
+                className={`flex-shrink-0 px-4 py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'bijoy' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                Unicode / Bijoy
+              </button>
+              <button 
+                onClick={() => setAppMode('converter')} 
+                className={`flex-shrink-0 px-4 py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'converter' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                Converter
               </button>
               <button 
                 onClick={() => setAppMode('ai')} 
@@ -153,6 +169,18 @@ export default function Home() {
         {appMode === 'pdfToExcel' && (
           <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
             <PdfToExcel />
+          </div>
+        )}
+
+        {appMode === 'bijoy' && (
+          <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+            <BijoyConverter />
+          </div>
+        )}
+
+        {appMode === 'converter' && (
+          <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+            <UniversalConverter />
           </div>
         )}
 
