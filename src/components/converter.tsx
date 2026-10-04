@@ -1,8 +1,11 @@
 'use client'
 
-import { useEffect, useId, useRef, useState } from 'react'
+// UPDATED: BMI calculator and searchable currency menus. Replace CustomDropdown.tsx too.
 
-// Single-file React / Next.js component. No Tailwind or API key required.
+import { useEffect, useId, useRef, useState } from 'react'
+import CustomDropdown from '@/components/CustomDropdown'
+
+// React / Next.js component using your existing CustomDropdown. No currency API key required.
 // Unit references: https://www.nist.gov/pml/special-publication-811
 // Currency API: https://frankfurter.dev/ (daily reference rates, not bank quotes).
 type Unit = { id: string; name: string; factor: number; offset?: number; reciprocal?: boolean }
@@ -177,20 +180,33 @@ function readCachedRate(base: string, quote: string): SavedRate | null {
   return null
 }
 
+function calculateBMI(weightKg: number, heightMetres: number): number {
+  if (!Number.isFinite(weightKg) || !Number.isFinite(heightMetres) || weightKg <= 0 || heightMetres <= 0) throw new Error('Enter a weight and height greater than zero.')
+  const bmi = weightKg / heightMetres ** 2
+  if (!Number.isFinite(bmi) || bmi <= 0) throw new Error('These measurements exceed the supported numeric range.')
+  return bmi
+}
+function bmiCategory(bmi: number): string {
+  return bmi < 18.5 ? 'Underweight' : bmi < 25 ? 'Healthy weight' : bmi < 30 ? 'Overweight' : 'Obesity'
+}
+
 // UI begins here.
 const CSS = `
 .uc-root,.uc-root *{box-sizing:border-box}.uc-root{max-width:1120px;margin:auto;padding:28px;border:1px solid #e2e8f0;border-radius:20px;background:#fff;color:#172b3a;font-family:Arial,sans-serif;color-scheme:light}
 .uc-root h2{margin:0;font-size:26px;letter-spacing:-.6px}.uc-root p{line-height:1.6}.uc-root .uc-sub{color:#657587;font-size:14px;margin:8px 0 24px}.uc-root .uc-tabs{display:flex;gap:8px;padding:5px;background:#f1f5f9;border-radius:12px;width:fit-content;margin-bottom:24px}
 .uc-root button{cursor:pointer;font:600 14px Arial,sans-serif;border:1px solid #d4dfe7;border-radius:9px;padding:11px 16px;color:#254253;background:#fff}.uc-root button:hover:not(:disabled){background:#edf5f5}.uc-root button:disabled{opacity:.5;cursor:not-allowed}.uc-root .uc-tabs button{border:0;background:transparent}.uc-root .uc-tabs button[aria-pressed=true]{background:#fff;color:#08776e;box-shadow:0 1px 5px #17394a18}
-.uc-root label{display:block;font-size:13px;font-weight:700;margin-bottom:9px}.uc-root input,.uc-root select{width:100%;min-width:0;border:1px solid #cbd8e1;border-radius:9px;padding:12px;background:#fff;color:#172b3a;font:16px Arial,sans-serif}.uc-root input:focus-visible,.uc-root select:focus-visible,.uc-root button:focus-visible{outline:3px solid #88c9c1;outline-offset:2px}
-.uc-root .uc-settings{display:grid;grid-template-columns:1fr 180px;gap:16px;margin-bottom:20px}.uc-root .uc-grid{display:grid;grid-template-columns:minmax(0,1fr) 60px minmax(0,1fr);align-items:center;gap:16px}.uc-root .uc-panel{background:#f8fafb;border:1px solid #e2e8f0;border-radius:14px;padding:20px;min-width:0}.uc-root .uc-panel select{margin-bottom:18px}.uc-root .uc-panel input{font-size:27px;font-weight:600;height:70px}.uc-root .uc-result{background:#eff9f6;border-color:#c9e6dc}.uc-root .uc-result input{background:transparent;border-color:#c0dfd5;color:#116958}
+.uc-root label,.uc-root .uc-field-label{display:block;font-size:13px;font-weight:700;margin-bottom:9px}.uc-root input{width:100%;min-width:0;border:1px solid #cbd8e1;border-radius:9px;padding:12px;background:#fff;color:#172b3a;font:16px Arial,sans-serif}.uc-root input:focus-visible,.uc-root button:focus-visible{outline:3px solid #88c9c1;outline-offset:2px}
+.uc-root .uc-settings{display:grid;grid-template-columns:1fr 180px;gap:16px;margin-bottom:20px}.uc-root .uc-grid{display:grid;grid-template-columns:minmax(0,1fr) 60px minmax(0,1fr);align-items:center;gap:16px}.uc-root .uc-panel{background:#f8fafb;border:1px solid #e2e8f0;border-radius:14px;padding:20px;min-width:0}.uc-root .uc-unit-dropdown{margin-bottom:18px}.uc-root .uc-panel input{font-size:27px;font-weight:600;height:70px}.uc-root .uc-result{background:#eff9f6;border-color:#c9e6dc}.uc-root .uc-result input{background:transparent;border-color:#c0dfd5;color:#116958}
 .uc-root .uc-swap{padding:12px 0;font-size:23px}.uc-root .uc-actions{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-top:18px;flex-wrap:wrap}.uc-root .uc-note{font-size:13px;color:#637786;margin:14px 0 0}.uc-root .uc-error{background:#fff2ef;color:#a63622;border:1px solid #f2cec5;padding:12px;border-radius:9px;font-size:14px}.uc-root .uc-meta{background:#f6f8fa;border-radius:10px;padding:14px;margin-top:20px;font-size:13px;line-height:1.8;overflow-wrap:anywhere}.uc-root .uc-meta p{margin:0}.uc-root a{color:#08776e}.uc-root .uc-footer{margin-top:24px;border-top:1px solid #e2e8f0;padding-top:16px;display:flex;justify-content:space-between;gap:14px;align-items:center;flex-wrap:wrap}.uc-root .uc-footer p{margin:0;font-size:12px;color:#657587}.uc-root .uc-copy-status{font-size:13px;color:#405c6c;min-height:20px;margin:10px 0 0}.uc-root .uc-title-row{display:flex;align-items:center;justify-content:space-between;gap:16px}.uc-root .uc-badge{font-size:11px;background:#eef7f5;border-radius:20px;color:#247362;padding:8px 11px;white-space:nowrap}
+.uc-root .uc-dropdown{position:relative;min-width:0}.uc-root .uc-dropdown:focus-within{z-index:101}
+.uc-root .uc-tabs{flex-wrap:wrap;max-width:100%}.uc-root .uc-bmi-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px}.uc-root .uc-bmi-fields{display:grid;gap:16px}.uc-root .uc-height-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}.uc-root .uc-bmi-number{font-size:48px;font-weight:700;margin:12px 0;color:#116958}.uc-root .uc-bmi-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:20px}.uc-root .uc-bmi-table th,.uc-root .uc-bmi-table td{text-align:left;padding:10px;border-bottom:1px solid #dde7e8}.uc-root .uc-bmi-table tr[aria-current=true]{background:#e4f2ec;font-weight:700}
+@media(max-width:650px){.uc-root .uc-bmi-grid{grid-template-columns:1fr}}
 @media(max-width:650px){.uc-root{padding:18px}.uc-root h2{font-size:22px}.uc-root .uc-grid{grid-template-columns:minmax(0,1fr);gap:12px}.uc-root .uc-swap{width:60px;justify-self:center;transform:rotate(90deg)}.uc-root .uc-settings{grid-template-columns:minmax(0,1fr)}.uc-root .uc-badge{display:none}.uc-root .uc-panel{padding:16px}.uc-root .uc-panel input{font-size:23px}}
 `
 
 export default function UniversalConverter() {
   const id = useId()
-  const [mode,setMode] = useState<'unit'|'currency'>('unit')
+  const [mode,setMode] = useState<'unit'|'currency'|'bmi'>('unit')
   const [categoryId,setCategoryId] = useState('length')
   const [unitFrom,setUnitFrom] = useState('m'), [unitTo,setUnitTo] = useState('km')
   const [currencyFrom,setCurrencyFrom] = useState('USD'), [currencyTo,setCurrencyTo] = useState('BDT')
@@ -208,7 +224,7 @@ export default function UniversalConverter() {
   const rate = rateState.key === pairKey ? rateState.saved : null
   const rateLoading = mode === 'currency' && !sameCurrency && (rateState.key !== pairKey || rateState.loading)
   const rateError = rateState.key === pairKey ? rateState.error : ''
-  const options = mode === 'unit' ? category.units.map(u => ({id:u.id,name:u.name})) : currencies.map(c => ({id:c.iso_code,name:`${c.iso_code} — ${c.name}`}))
+  const options = mode === 'unit' ? category.units.map(u => ({value:u.id,label:u.name})) : currencies.map(c => ({value:c.iso_code,label:`${c.iso_code} — ${c.name}`}))
   const from = mode === 'unit' ? unitFrom : currencyFrom, to = mode === 'unit' ? unitTo : currencyTo
 
   // Fetch on entry, hourly while visible, on return to the tab, and on reconnect.
@@ -301,41 +317,49 @@ export default function UniversalConverter() {
     <section className="uc-root" aria-labelledby={`${id}-title`}>
       <style>{CSS}</style>
       <header>
-        <div className="uc-title-row"><h2 id={`${id}-title`}>Unit &amp; Currency Converter</h2><span className="uc-badge">Everyday calculations, simplified</span></div>
-        <p className="uc-sub">Convert measurements instantly, or check the latest available exchange rates.</p>
+        <div className="uc-title-row"><h2 id={`${id}-title`}>Unit, Currency &amp; BMI Calculator</h2><span className="uc-badge">Everyday calculations, simplified</span></div>
+        <p className="uc-sub">Convert measurements, check exchange rates, or calculate adult BMI.</p>
       </header>
       <div className="uc-tabs" role="group" aria-label="Converter type">
         <button type="button" aria-pressed={mode==='unit'} onClick={() => setMode('unit')}>Unit converter</button>
         <button type="button" aria-pressed={mode==='currency'} onClick={() => setMode('currency')}>Currency converter</button>
+        <button type="button" aria-pressed={mode==='bmi'} onClick={() => setMode('bmi')}>BMI calculator</button>
       </div>
+      {mode==='bmi' ? <BMICalculator /> : <>
       <div className="uc-settings">
-        <div>{mode === 'unit' ? <><label htmlFor={`${id}-category`}>Measurement category</label>
-          <select id={`${id}-category`} value={categoryId} onChange={e => {
-            const next = CATEGORIES.find(c => c.id === e.target.value)!
-            setCategoryId(next.id); setUnitFrom(next.units[0].id); setUnitTo(next.units[1].id)
-          }}>{CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></>
-          : <><label htmlFor={`${id}-currency-info`}>Exchange rates</label><p id={`${id}-currency-info`} className="uc-note">{catalogLoading ? 'Updating currency list…' : `${currencies.length} currencies in the list`}. Default: USD → BDT.</p></>}
+        <div>{mode === 'unit' ? <>
+          <span id={`${id}-category-label`} className="uc-field-label">Measurement category</span>
+          <div className="uc-dropdown" role="group" aria-labelledby={`${id}-category-label`}>
+            <CustomDropdown options={CATEGORIES.map(c => ({value:c.id,label:c.name}))} value={categoryId} onChange={value => {
+              const next = CATEGORIES.find(c => c.id === value)!
+              setCategoryId(next.id); setUnitFrom(next.units[0].id); setUnitTo(next.units[1].id)
+            }} />
+          </div></>
+          : <><span className="uc-field-label">Exchange rates</span><p className="uc-note">{catalogLoading ? 'Updating currency list…' : `${currencies.length} currencies in the list`}. Default: USD → BDT.</p></>}
         </div>
-        <div><label htmlFor={`${id}-precision`}>Significant digits</label><select id={`${id}-precision`} value={precision} onChange={e => setPrecision(Number(e.target.value))}>
-          {[6,10,12,15].map(n => <option key={n} value={n}>{n} digits</option>)}
-        </select></div>
+        <div>
+          <span id={`${id}-precision-label`} className="uc-field-label">Significant digits</span>
+          <div className="uc-dropdown" role="group" aria-labelledby={`${id}-precision-label`}>
+            <CustomDropdown options={[6,10,12,15].map(n => ({value:String(n),label:`${n} digits`}))} value={String(precision)} onChange={value => setPrecision(Number(value))} />
+          </div>
+        </div>
       </div>
       <div className="uc-grid">
         <div className="uc-panel">
-          <label htmlFor={`${id}-from`}>From</label>
-          <select id={`${id}-from`} value={from} onChange={e => mode==='unit' ? setUnitFrom(e.target.value) : setCurrencyFrom(e.target.value)}>
-            {options.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
-          </select>
+          <span id={`${id}-from-label`} className="uc-field-label">From</span>
+          <div className="uc-dropdown uc-unit-dropdown" role="group" aria-labelledby={`${id}-from-label`}>
+            <CustomDropdown searchable={mode==='currency'} searchPlaceholder="Search currency name or code…" ariaLabel="From currency or unit" key={`${mode}:${categoryId}:from`} options={options} value={from} onChange={value => mode==='unit' ? setUnitFrom(value) : setCurrencyFrom(value)} />
+          </div>
           <label htmlFor={`${id}-amount`}>Amount</label>
           <input id={`${id}-amount`} type="text" inputMode="decimal" autoComplete="off" spellCheck={false} value={amount} placeholder="Enter a number"
             aria-invalid={!!inputError} aria-describedby={inputError ? `${id}-error` : undefined} onChange={e => setAmount(e.target.value)} />
         </div>
         <button type="button" className="uc-swap" onClick={swap} aria-label="Swap source and target" title="Swap source and target">⇄</button>
         <div className="uc-panel uc-result" aria-busy={rateLoading}>
-          <label htmlFor={`${id}-to`}>To</label>
-          <select id={`${id}-to`} value={to} onChange={e => mode==='unit' ? setUnitTo(e.target.value) : setCurrencyTo(e.target.value)}>
-            {options.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
-          </select>
+          <span id={`${id}-to-label`} className="uc-field-label">To</span>
+          <div className="uc-dropdown uc-unit-dropdown" role="group" aria-labelledby={`${id}-to-label`}>
+            <CustomDropdown searchable={mode==='currency'} searchPlaceholder="Search currency name or code…" ariaLabel="To currency or unit" key={`${mode}:${categoryId}:to`} options={options} value={to} onChange={value => mode==='unit' ? setUnitTo(value) : setCurrencyTo(value)} />
+          </div>
           <label htmlFor={`${id}-result`}>Converted result{mode==='currency' && !sameCurrency && rateState.key===pairKey && rateState.cached ? ' (cached)' : ''}</label>
           <input ref={resultRef} id={`${id}-result`} readOnly value={resultText} placeholder={rateLoading ? 'Fetching rate…' : '—'} aria-describedby={`${id}-notes`} />
         </div>
@@ -366,6 +390,63 @@ export default function UniversalConverter() {
         <p>{mode==='unit' ? `${CATEGORIES.length} categories · ${CATEGORIES.reduce((n,c)=>n+c.units.length,0)} unit choices · Unit conversion works offline once loaded` : 'Internet is needed for new rates. Saved fallback rates are always labelled.'}</p>
         {mode==='currency' && <button type="button" disabled={rateLoading || catalogLoading} onClick={() => {lastRefresh.current=Date.now();setRefresh(n=>n+1)}}>Refresh rates</button>}
       </footer>
+      </>}
     </section>
   )
+}
+
+
+function BMICalculator() {
+  const id = useId()
+  const [system,setSystem] = useState<'metric'|'imperial'>('metric')
+  const [kg,setKg] = useState(''), [cm,setCm] = useState('')
+  const [lb,setLb] = useState(''), [feet,setFeet] = useState(''), [inches,setInches] = useState('')
+  let bmi: number | null = null, error = ''
+  try {
+    const weight = parseAmount(system==='metric' ? kg : lb)
+    let metres: number | null
+    if (system==='metric') { const height=parseAmount(cm); metres=height===null ? null : height/100 }
+    else {
+      const ft=parseAmount(feet), inch=parseAmount(inches) ?? 0
+      if (ft !== null && (!Number.isInteger(ft) || ft < 0)) throw new Error('Feet must be a whole number, zero or greater.')
+      if (inch < 0 || inch >= 12) throw new Error('Inches must be between 0 and less than 12.')
+      metres=ft===null ? null : (ft*12+inch)*0.0254
+    }
+    if (weight !== null && metres !== null) bmi=calculateBMI(system==='metric' ? weight : weight*POUND,metres)
+  } catch(e) { error=e instanceof Error ? e.message : 'Check your measurements.' }
+  const category=bmi===null ? '' : bmiCategory(bmi)
+  const rows=[['Underweight','Below 18.5'],['Healthy weight','18.5 to less than 25'],['Overweight','25 to less than 30'],['Obesity','30 or above']]
+  return <div>
+    <h3 style={{margin:'0 0 8px'}}>Adult BMI calculator</h3>
+    <p className="uc-note" style={{marginBottom:16}}>For adults aged 20 and older. Enter your height and weight to calculate body mass index.</p>
+    <div className="uc-tabs" role="group" aria-label="BMI measurement system">
+      <button type="button" aria-pressed={system==='metric'} onClick={()=>setSystem('metric')}>Metric (kg / cm)</button>
+      <button type="button" aria-pressed={system==='imperial'} onClick={()=>setSystem('imperial')}>Imperial (lb / ft / in)</button>
+    </div>
+    <div className="uc-bmi-grid">
+      <div className="uc-panel uc-bmi-fields">
+        <div><label htmlFor={`${id}-weight`}>Weight ({system==='metric' ? 'kg' : 'lb'})</label>
+          <input id={`${id}-weight`} inputMode="decimal" type="text" value={system==='metric' ? kg : lb} placeholder={system==='metric' ? 'e.g. 70' : 'e.g. 154'} onChange={e=>system==='metric'?setKg(e.target.value):setLb(e.target.value)} aria-describedby={`${id}-error`} />
+        </div>
+        {system==='metric' ? <div><label htmlFor={`${id}-height`}>Height (cm)</label><input id={`${id}-height`} type="text" inputMode="decimal" value={cm} placeholder="e.g. 175" onChange={e=>setCm(e.target.value)} aria-describedby={`${id}-error`} /></div>
+        : <div className="uc-height-row">
+          <div><label htmlFor={`${id}-feet`}>Height (feet)</label><input id={`${id}-feet`} type="text" inputMode="numeric" value={feet} placeholder="e.g. 5" onChange={e=>setFeet(e.target.value)} aria-describedby={`${id}-error`} /></div>
+          <div><label htmlFor={`${id}-inches`}>Inches</label><input id={`${id}-inches`} type="text" inputMode="decimal" value={inches} placeholder="0" onChange={e=>setInches(e.target.value)} aria-describedby={`${id}-error`} /></div>
+        </div>}
+        <button type="button" onClick={()=>{setKg('');setCm('');setLb('');setFeet('');setInches('')}}>Clear BMI</button>
+      </div>
+      <div className="uc-panel uc-result" aria-live="polite">
+        <span className="uc-field-label">Your BMI (kg/m²)</span>
+        <p className="uc-bmi-number">{bmi===null ? '—' : bmi.toFixed(2)}</p>
+        <p>{bmi===null ? 'Enter both measurements to see your result.' : <strong>{category}</strong>}</p>
+        <p className="uc-note">BMI = weight in kilograms ÷ height in metres². Display rounded to two decimals; category uses the unrounded value.</p>
+      </div>
+    </div>
+    <p id={`${id}-error`} role={error?'alert':undefined} className={error?'uc-error':'uc-note'}>{error}</p>
+    <table className="uc-bmi-table"><caption style={{textAlign:'left',fontWeight:700}}>Adult BMI reference ranges</caption><thead><tr><th scope="col">Category</th><th scope="col">BMI (kg/m²)</th></tr></thead>
+      <tbody>{rows.map(([name,range])=><tr key={name} aria-current={category===name?'true':undefined}><th scope="row">{name}</th><td>{range}</td></tr>)}</tbody>
+    </table>
+    <p className="uc-note">BMI is a screening measure, not a diagnosis or a direct measure of body fat. It does not distinguish muscle from fat and is not suitable for assessing pregnancy. Children and teens need age-specific assessment. <a href="https://www.cdc.gov/bmi/adult-calculator/index.html" target="_blank" rel="noreferrer">CDC adult BMI guidance</a>.</p>
+    <p className="uc-note">Calculations happen in your browser. Height and weight are not sent to the currency service or saved.</p>
+  </div>
 }
