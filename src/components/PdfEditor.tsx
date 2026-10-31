@@ -2,7 +2,8 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { jsPDF } from 'jspdf'
+import { PDFDocument, degrees } from 'pdf-lib'
+import type { PDFDocumentProxy } from 'pdfjs-dist'
 import JSZip from 'jszip'
 import { removeBackground, Config } from '@imgly/background-removal'
 import { DndContext, closestCenter, TouchSensor, MouseSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core'
@@ -10,6 +11,24 @@ import { SortableContext, arrayMove, useSortable, rectSortingStrategy } from '@d
 import { CSS } from '@dnd-kit/utilities'
 import { Settings2, Trash2, Eye, Download, RotateCw, RotateCcw, Lock, Unlock, FileText, Type, SlidersHorizontal, X, FileImage, ShieldCheck, Layers, Scissors, Wand2, Hash, Edit3, PenTool, Image as ImageIcon, Sparkles, Move, ChevronLeft, ChevronRight, LayoutGrid, ZoomIn, ZoomOut, Plus, Trash, MoreVertical, CheckCircle2, Undo2, PanelRightClose } from 'lucide-react'
 import CustomDropdown from './CustomDropdown'
+
+// Preserve source bytes independently from disposable preview images.
+type SourceFile = { bytes: Uint8Array; size: number; pdf?: PDFDocumentProxy; native?: PDFDocument };
+const errorText = (error: unknown) => error instanceof Error ? error.message : 'Operation failed';
+const formatBytes = (n: number) => `${(n / 1048576).toFixed(3)} MiB (${n.toLocaleString()} bytes)`;
+const yieldUI = () => new Promise<void>(resolve => setTimeout(resolve, 0));
+const saveBlob = (blob: Blob, name: string) => {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a'); link.href = url; link.download = name;
+  document.body.appendChild(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+};
+const pdfAssets = { standardFontDataUrl: '/pdfjs/standard_fonts/', cMapUrl: '/pdfjs/cmaps/', cMapPacked: true, wasmUrl: '/pdfjs/wasm/' };
+let pdfJsPromise: Promise<typeof import('pdfjs-dist')> | undefined;
+const loadPdfJs = () => pdfJsPromise ??= import('pdfjs-dist').then(lib => {
+  lib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+  return lib;
+});
 
 // --- HELPER FUNCTIONS ---
 const createImage = (url: string): Promise<HTMLImageElement> =>
@@ -126,7 +145,10 @@ const processDocumentTextExtraction = async (imageUrl: string): Promise<string> 
 };
 
 // --- DATA STRUCTURES & FILTERS ---
-type PageItem = { 
+type PageItem = {
+  sourceIndex?: number;
+  widthPt?: number;
+  heightPt?: number; 
   id: string; 
   fileId: string;
   fileName: string;
@@ -384,6 +406,28 @@ type PanelId = 'security' | 'overlays' | 'compression' | 'merge' | 'split' | 'en
 type FullScreenMode = 'edit' | 'preview' | null;
 
 export default function PdfEditor() {
+  const sources = useRef(new Map<string, SourceFile>());
+  const ownedUrls = useRef(new Set<string>());
+  const exportCache = useRef<{ key: string; blob: Blob } | null>(null);
+  const [compressionMode, setCompressionMode] = useState<'preserve' | 'image'>('preserve');
+  const [compressionLevel, setCompressionLevel] = useState<'low' | 'medium' | 'high'>('low');
+  const allowRaster = compressionMode === 'image';
+  const [pdfSize, setPdfSize] = useState<{ key: string; bytes: number } | null>(null);
+  const [numericCells, setNumericCells] = useState(false);
+  const [includeReferences, setIncludeReferences] = useState(true);
+  const [conversionReport, setConversionReport] = useState<{ key: string; messages: string[] } | null>(null);
+  const officeAbort = useRef<AbortController | null>(null);
+  const [outputInfo, setOutputInfo] = useState<{ key: string; bytes: number; name: string } | null>(null);
+  const [measuring, setMeasuring] = useState(false);
+  const busyRef = useRef(false);
+  const trackUrl = (blob: Blob) => {
+    const url = URL.createObjectURL(blob); ownedUrls.current.add(url); return url;
+  };
+  useEffect(() => () => {
+    officeAbort.current?.abort();
+    ownedUrls.current.forEach(url => URL.revokeObjectURL(url));
+    sources.current.forEach(source => { void source.pdf?.destroy(); });
+  }, []);
   // 1. All State Hooks
   const [pages, setPages] = useState<PageItem[]>([])
   const [selectedPages, setSelectedPages] = useState<string[]>([])
@@ -429,12 +473,16 @@ export default function PdfEditor() {
   const rightSideSigRef = useRef<HTMLDivElement>(null)
   const modalSigRef = useRef<HTMLDivElement>(null)
 
-  const [enableCompression, setEnableCompression] = useState(false)
-  const [compressionQuality, setCompressionQuality] = useState(70)
-  const [ppiMode, setPpiMode] = useState<string>('150')
-  const [customPPI, setCustomPPI] = useState<number>(150)
-  const [compressionGrayscale, setCompressionGrayscale] = useState(false)
-  const [estimatedSizes, setEstimatedSizes] = useState<{ original: string, compressed: string } | null>(null)
+  const enableCompression = allowRaster;
+  const compressionPresets = {
+    low: { quality: 90, ppi: 300, hint: 'Sharper pages · larger file' },
+    medium: { quality: 85, ppi: 200, hint: 'Balanced size and clarity' },
+    high: { quality: 70, ppi: 120, hint: 'Smaller file · less detail' },
+  } as const;
+  const compressionQuality = compressionPresets[compressionLevel].quality;
+  const ppiMode: string = String(compressionPresets[compressionLevel].ppi);
+  const customPPI = 300;
+  const compressionGrayscale = false;
 
   const [cleanWatermarks, setCleanWatermarks] = useState(false)
   const [splitRanges, setSplitRanges] = useState('')
@@ -448,17 +496,6 @@ export default function PdfEditor() {
     useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } })
   )
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      import('pdfjs-dist').then((pdfjsLib) => {
-        const isModernBrowser = 'noModule' in HTMLScriptElement.prototype
-        pdfjsLib.GlobalWorkerOptions.workerSrc = isModernBrowser 
-          ? `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`
-          : `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/legacy/build/pdf.worker.min.js`
-      })
-    }
-  }, [])
 
   useEffect(() => {
     if (previewPageIndex >= pages.length && pages.length > 0) {
@@ -757,7 +794,7 @@ export default function PdfEditor() {
 
   // 7. Core Features (Drop, Enhance, Background Removal)
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
-    if (acceptedFiles.length === 0) return
+    if (acceptedFiles.length === 0 || busyRef.current) return
     setIsProcessing(true)
 
     if (!originalDocName || originalDocName === 'document') {
@@ -777,13 +814,15 @@ export default function PdfEditor() {
           setLoadingText(`Reading ${file.name}...`)
           await new Promise(r => setTimeout(r, 50))
           const arrayBuffer = await file.arrayBuffer()
-          const pdfjsLib = await import('pdfjs-dist')
+          const pdfjsLib = await loadPdfJs()
+          const bytes = new Uint8Array(arrayBuffer).slice()
           
           let pdf;
           try {
-            pdf = await pdfjsLib.getDocument({ data: arrayBuffer, password: unlockPassword }).promise
-          } catch (e: any) {
-            if (e.name === 'PasswordException') {
+            pdf = await pdfjsLib.getDocument({ ...pdfAssets, data: new Uint8Array(arrayBuffer), password: unlockPassword }).promise
+            sources.current.set(currentFileId, { bytes, size: file.size, pdf })
+          } catch (e: unknown) {
+            if (e instanceof Error && e.name === 'PasswordException') {
               alert(`The file ${file.name} is password protected. Enter the password in the 'Security' tab and try again.`)
               continue
             }
@@ -791,10 +830,12 @@ export default function PdfEditor() {
           }
           
           for (let i = 1; i <= pdf.numPages; i++) {
-            setLoadingText(`Extracting page ${i}/${pdf.numPages}...`)
+            setLoadingText(`Preview ${i}/${pdf.numPages} — original content retained…`)
+            await yieldUI()
             const page = await pdf.getPage(i)
             
-            const viewport = page.getViewport({ scale: 1.0 })
+            const originalViewport = page.getViewport({ scale: 1 })
+            const viewport = page.getViewport({ scale: Math.min(1.25, 1100 / Math.max(originalViewport.width, originalViewport.height)) })
             const canvas = document.createElement('canvas')
             const context = canvas.getContext('2d')
             if (!context) continue
@@ -802,11 +843,12 @@ export default function PdfEditor() {
             canvas.height = viewport.height
             canvas.width = viewport.width
 
-            await page.render({ canvasContext: context, viewport } as any).promise
+            await page.render({ canvas, canvasContext: context, viewport }).promise
             
             const objectUrl = await new Promise<string>((resolve) => {
                canvas.toBlob((blob) => {
-                  resolve(URL.createObjectURL(blob!));
+                  if (!blob) throw new Error('Preview encoding failed');
+                  resolve(trackUrl(blob));
                }, 'image/jpeg', 0.9);
             });
 
@@ -814,19 +856,24 @@ export default function PdfEditor() {
               id: `pdf-page-${Date.now()}-${Math.random()}`,
               fileId: currentFileId,
               fileName: file.name,
+              sourceIndex: i - 1, widthPt: originalViewport.width, heightPt: originalViewport.height,
               url: objectUrl, originalUrl: objectUrl, isLossless: false,
               rotation: 0, fineRotation: 0, scale: 1, brightness: 0, contrast: 0,
               saturation: 0, hue: 0, sepia: 0, grayscale: false, sharpen: 0
             })
+            canvas.width = 0; canvas.height = 0; page.cleanup();
           }
         } else if (file.type.startsWith('image/')) {
           setLoadingText('Adding image...')
           await new Promise(r => setTimeout(r, 50))
-          const objectUrl = URL.createObjectURL(file)
+          sources.current.set(currentFileId, { bytes: new Uint8Array(await file.arrayBuffer()), size: file.size })
+          const objectUrl = trackUrl(file)
+          const imageInfo = await createImage(objectUrl)
           newPages.push({
             id: `image-${file.name}-${Date.now()}`,
             fileId: currentFileId,
             fileName: file.name,
+            widthPt: imageInfo.width * 0.75, heightPt: imageInfo.height * 0.75,
             url: objectUrl, originalUrl: objectUrl, isLossless: file.type === 'image/png' || file.type === 'image/webp',
             rotation: 0, fineRotation: 0, scale: 1, brightness: 0, contrast: 0,
             saturation: 0, hue: 0, sepia: 0, grayscale: false, sharpen: 0
@@ -843,7 +890,7 @@ export default function PdfEditor() {
       }
 
     } catch (error) {
-      alert("Failed to process the file. It may be corrupted or highly encrypted.")
+      alert(errorText(error))
     } finally {
       setIsProcessing(false)
       setLoadingText('')
@@ -852,66 +899,37 @@ export default function PdfEditor() {
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
+    disabled: isProcessing || measuring,
     accept: { 'application/pdf': ['.pdf'], 'image/jpeg': ['.jpg', '.jpeg'], 'image/png': ['.png'], 'image/webp': ['.webp'] }
   })
 
-  useEffect(() => {
-    if (activePanel === 'compression' && pages.length > 0) {
-      let isMounted = true;
-      const estimateSizes = async () => {
-        try {
-          let origBytes = 0;
-          for (const p of pages) {
-            if (p.url.startsWith('data:') || p.url.startsWith('blob:')) {
-               origBytes += 1024 * 1024;
-            } else {
-              try {
-                const res = await fetch(p.url);
-                const blob = await res.blob();
-                origBytes += blob.size;
-              } catch {
-                origBytes += 1024 * 1024;
-              }
-            }
-          }
-
-          let compBytes = origBytes;
-          if (enableCompression) {
-            compBytes = origBytes * (compressionQuality / 100) * 0.8;
-          }
-
-          if (isMounted) {
-            const format = (bytes: number) => {
-              if (bytes === 0) return '0 B';
-              const k = 1024;
-              const sizes = ['B', 'KB', 'MB', 'GB'];
-              const i = Math.floor(Math.log(bytes) / Math.log(k));
-              return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-            };
-            setEstimatedSizes({ original: format(origBytes), compressed: format(compBytes) });
-          }
-        } catch (e) {
-          console.error("Size estimation failed silently", e);
-        }
-      };
-      const timer = setTimeout(estimateSizes, 400);
-      return () => { isMounted = false; clearTimeout(timer); };
-    }
-  }, [activePanel, pages, enableCompression, compressionQuality, ppiMode, customPPI, compressionGrayscale]);
-
   const handleRemovePageBg = async (pageId: string, imageUrl: string) => {
     if (!imageUrl) return
+    if (!allowRaster) { alert('Background removal changes pixels and may erase faint digits. Choose “Convert to image & compress” first.'); return; }
     setIsProcessing(true)
     setLoadingText('Removing Background from Page...')
     await new Promise(r => setTimeout(r, 50)) 
 
     try {
+      const item = pages.find(p => p.id === pageId);
+      if (item?.sourceIndex !== undefined && item.url === item.originalUrl) {
+        const source = sources.current.get(item.fileId)?.pdf;
+        if (!source) throw new Error('Original PDF is unavailable');
+        const original = await source.getPage(item.sourceIndex + 1);
+        const viewport = original.getViewport({ scale: 300 / 72 });
+        if (viewport.width * viewport.height > 32000000) throw new Error('Page exceeds the processing limit');
+        const canvas = document.createElement('canvas'); canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
+        const context = canvas.getContext('2d'); if (!context) throw new Error('Canvas unavailable');
+        await original.render({ canvas, canvasContext: context, viewport }).promise;
+        const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(b => b ? resolve(b) : reject(new Error('Encoding failed')), 'image/png'));
+        imageUrl = trackUrl(blob); canvas.width = 0; canvas.height = 0; original.cleanup();
+      }
       const optimizedDataUrl = await optimizeImageForAI(imageUrl)
       let removedSuccessfully = false;
 
       if (pageBgModel === 'document-advanced') {
         try {
-          const cleanedDataUrl = await processDocumentTextExtraction(optimizedDataUrl);
+          const cleanedDataUrl = await processDocumentTextExtraction(imageUrl);
           saveHistory();
           updatePageAttributes(pageId, { url: cleanedDataUrl });
           removedSuccessfully = true;
@@ -979,7 +997,7 @@ export default function PdfEditor() {
         const bgConfig: Config = { model: fallbackModel as any, output: { format: "image/png" } }
         const blob = await removeBackground(imageUrl, bgConfig) 
         saveHistory();
-        updatePageAttributes(pageId, { url: URL.createObjectURL(blob) })
+        updatePageAttributes(pageId, { url: trackUrl(blob) })
       }
       showToast('Page background removed')
     } catch (e) {
@@ -1070,7 +1088,7 @@ export default function PdfEditor() {
         const bgConfig: Config = { model: fallbackModel as any, output: { format: "image/png" } }
         const blob = await removeBackground(imageUrl, bgConfig) 
         saveHistory();
-        updateSignature(sigId, { imageUrl: URL.createObjectURL(blob) })
+        updateSignature(sigId, { imageUrl: trackUrl(blob) })
       }
       showToast('Signature background removed')
     } catch (e) {
@@ -1109,7 +1127,7 @@ export default function PdfEditor() {
   const handleSigImageUpload = (sigId: string, e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       saveHistory();
-      updateSignature(sigId, { imageUrl: URL.createObjectURL(e.target.files![0]), mode: 'image' })
+      updateSignature(sigId, { imageUrl: trackUrl(e.target.files![0]), mode: 'image' })
     }
   }
 
@@ -1172,8 +1190,29 @@ export default function PdfEditor() {
 
 
   // 8. Output Core (Exports)
-  const renderPageToCanvas = async (page: PageItem, index: number, forPdf = false, skipSignature = false) => {
-    const img = await createImage(page.url)
+  const renderPageToCanvas = async (page: PageItem, index: number, forPdf = false, skipSignature = false, overlayOnly = false) => {
+    let renderUrl = page.url;
+    let temporaryUrl: string | undefined;
+    if (!overlayOnly && page.sourceIndex !== undefined && page.url === page.originalUrl) {
+      const sourcePdf = sources.current.get(page.fileId)?.pdf;
+      if (!sourcePdf) throw new Error('Original PDF is unavailable. Reopen the file.');
+      const sourcePage = await sourcePdf.getPage(page.sourceIndex + 1);
+      const requestedPPI = forPdf && enableCompression && allowRaster
+        ? (ppiMode === 'custom' ? customPPI : Number(ppiMode)) || 300 : 300;
+      const viewport = sourcePage.getViewport({ scale: requestedPPI / 72 });
+      if (viewport.width * viewport.height > 32000000) throw new Error('This page exceeds the 32 megapixel export limit. Choose a lower PPI.');
+      const sourceCanvas = document.createElement('canvas');
+      sourceCanvas.width = Math.ceil(viewport.width); sourceCanvas.height = Math.ceil(viewport.height);
+      const context = sourceCanvas.getContext('2d');
+      if (!context) throw new Error('Canvas is unavailable');
+      await sourcePage.render({ canvas: sourceCanvas, canvasContext: context, viewport }).promise;
+      const blob = await new Promise<Blob>((resolve, reject) => sourceCanvas.toBlob(b => b ? resolve(b) : reject(new Error('Page encoding failed')), 'image/png'));
+      temporaryUrl = URL.createObjectURL(blob); renderUrl = temporaryUrl;
+      sourceCanvas.width = 0; sourceCanvas.height = 0; sourcePage.cleanup();
+    }
+    let img: HTMLImageElement;
+    try { img = await createImage(renderUrl); }
+    finally { if (temporaryUrl) URL.revokeObjectURL(temporaryUrl); }
     const canvas = document.createElement('canvas')
     const ctx = canvas.getContext('2d')
     if (!ctx) return null
@@ -1186,10 +1225,10 @@ export default function PdfEditor() {
     let targetHeight = rawHeight
 
     let scaleRatio = 1
-    if (forPdf && enableCompression) {
+    if (forPdf && enableCompression && allowRaster) {
       const activePPI = ppiMode === 'custom' ? customPPI : Number(ppiMode)
       if (activePPI > 0) {
-        const maxPixels = 11.7 * activePPI
+        const maxPixels = Math.max(page.widthPt ?? img.width * 0.75, page.heightPt ?? img.height * 0.75) / 72 * activePPI
         const longestSide = Math.max(targetWidth, targetHeight)
         if (longestSide > maxPixels) {
           scaleRatio = maxPixels / longestSide
@@ -1197,9 +1236,11 @@ export default function PdfEditor() {
       }
     }
 
-    canvas.width = targetWidth * scaleRatio
-    canvas.height = targetHeight * scaleRatio
+    if (targetWidth * targetHeight * scaleRatio * scaleRatio > 32000000) throw new Error('Page exceeds the 32 megapixel canvas limit. Use a lower PPI.');
+    canvas.width = Math.max(1, Math.round(targetWidth * scaleRatio))
+    canvas.height = Math.max(1, Math.round(targetHeight * scaleRatio))
 
+    if (!overlayOnly) {
     ctx.fillStyle = '#FFFFFF'
     ctx.fillRect(0, 0, canvas.width, canvas.height)
 
@@ -1278,6 +1319,8 @@ export default function PdfEditor() {
       ctx.putImageData(imgData, 0, 0);
     }
 
+    } // Base image and filters are excluded from a transparent overlay.
+
     // Signatures Overlay
     if (!skipSignature && signatures && signatures.length > 0) {
       for (const sig of signatures) {
@@ -1338,34 +1381,107 @@ export default function PdfEditor() {
     return canvas;
   }
 
-  const generatePdfBlob = async (pagesToExport: PageItem[] = pages): Promise<Blob | null> => {
-    if (pagesToExport.length === 0) return null
+  const settingsKey = JSON.stringify({ pages, signatures, watermarkText, watermarkPlacement, watermarkOpacity,
+    addPageNumbers, cleanWatermarks, enableCompression, compressionQuality, ppiMode, customPPI,
+    compressionGrayscale, allowRaster, encryptPassword });
+  const operationKey = settingsKey + exportFormat + numericCells + includeReferences;
+  const needsPixels = (p: PageItem) => p.url !== p.originalUrl || p.brightness !== 0 || p.contrast !== 0 ||
+    p.saturation !== 0 || p.hue !== 0 || p.grayscale || p.sepia !== 0 || p.sharpen !== 0 || cleanWatermarks;
 
-    let pdf: jsPDF | null = null;
-    
-    for (let i = 0; i < pagesToExport.length; i++) {
-      const canvas = await renderPageToCanvas(pagesToExport[i], i, true)
-      if (!canvas) continue
-
-      const orientation = canvas.width > canvas.height ? 'l' : 'p'
-      
-      if (i === 0) {
-        const pdfOptions: any = { orientation, unit: 'px', format: [canvas.width, canvas.height] }
-        if (encryptPassword) {
-          pdfOptions.encryption = { userPassword: encryptPassword, ownerPassword: encryptPassword, userPermissions: ["print", "modify"] }
-        }
-        pdf = new jsPDF(pdfOptions)
-      } else {
-        pdf!.addPage([canvas.width, canvas.height], orientation)
+  const generatePdfBlob = async (pagesToExport: PageItem[] = pages, preserveForOffice = false): Promise<Blob | null> => {
+    if (!pagesToExport.length) return null;
+    if (encryptPassword) throw new Error('Password encryption is not supported by the content-preserving engine. Clear the output password; no unencrypted substitute will be exported.');
+    if (!preserveForOffice && pagesToExport === pages && exportCache.current?.key === settingsKey) return exportCache.current.blob;
+    const pdf = await PDFDocument.create();
+    const raster = allowRaster && !preserveForOffice;
+    const sourceDocs = new Map<string, PDFDocument>();
+    for (const p of pagesToExport) {
+      if (p.sourceIndex === undefined) continue;
+      const source = sources.current.get(p.fileId);
+      if (!source) throw new Error('Original source is missing. Reopen the PDF.');
+      if (!sourceDocs.has(p.fileId)) {
+        try { source.native ??= await PDFDocument.load(source.bytes, { updateMetadata: false }); }
+        catch { throw new Error('This PDF cannot be safely rewritten (possibly encrypted). Supply an unencrypted PDF. No screenshot substitute was made.'); }
+        if (source.native.getForm().getFields().length) throw new Error('Interactive/signed form PDFs need a form-aware editor. Export is blocked to avoid losing fields or signatures.');
+        sourceDocs.set(p.fileId, source.native);
       }
-
-      const outputQuality = enableCompression ? (compressionQuality / 100) : 0.92
-      const processedData = canvas.toDataURL('image/jpeg', outputQuality)
-      pdf!.addImage(processedData, 'JPEG', 0, 0, canvas.width, canvas.height)
     }
-    
-    return pdf ? pdf.output('blob') : null
-  }
+    // Copy in one batch per source to share resources between its pages.
+    const copied = new Map<string, Awaited<ReturnType<PDFDocument['copyPages']>>>();
+    if (!raster) for (const [id, doc] of sourceDocs) {
+      const group = pagesToExport.filter(p => p.fileId === id && p.sourceIndex !== undefined);
+      copied.set(id, await pdf.copyPages(doc, group.map(p => p.sourceIndex!)));
+    }
+    const offsets = new Map<string, number>();
+    for (let i = 0; i < pagesToExport.length; i++) {
+      const p = pagesToExport[i];
+      const originalIndex = pages.findIndex(item => item.id === p.id);
+      setLoadingText(`Building page ${i + 1}/${pagesToExport.length}…`);
+      await yieldUI();
+      if (p.sourceIndex !== undefined && !raster) {
+        if (needsPixels(p) || p.fineRotation !== 0 || p.scale !== 1) throw new Error(`Page ${originalIndex + 1}: filters, fine rotation and zoom need image mode. Reset them, or choose “Convert to image & compress”.`);
+        const offset = offsets.get(p.fileId) ?? 0;
+        const page = copied.get(p.fileId)![offset]; offsets.set(p.fileId, offset + 1);
+        page.setRotation(degrees((page.getRotation().angle + p.rotation + 360) % 360));
+        pdf.addPage(page);
+        if (watermarkText || addPageNumbers || signatures.some(sig => shouldApplySignature(originalIndex, sig.applyMode, sig.customPages))) {
+          const overlay = await renderPageToCanvas(p, originalIndex, false, false, true);
+          if (!overlay) throw new Error('Overlay rendering failed');
+          const png = await pdf.embedPng(overlay.toDataURL('image/png'));
+          const box = page.getCropBox(), r = page.getRotation().angle;
+          const w = r % 180 === 0 ? box.width : box.height;
+          const h = r % 180 === 0 ? box.height : box.width;
+          const x = box.x + (r === 90 || r === 180 ? box.width : 0);
+          const y = box.y + (r === 180 || r === 270 ? box.height : 0);
+          page.drawImage(png, { x, y, width: w, height: h, rotate: degrees(r) });
+          overlay.width = 0; overlay.height = 0;
+        }
+      } else {
+        const canvas = await renderPageToCanvas(p, originalIndex, true);
+        if (!canvas) throw new Error('Page rendering failed');
+        const rotated = p.rotation % 180 !== 0;
+        const width = p.widthPt ? (rotated ? p.heightPt! : p.widthPt) : canvas.width * 0.75;
+        const height = p.heightPt ? (rotated ? p.widthPt! : p.heightPt) : canvas.height * 0.75;
+        const imageSource = sources.current.get(p.fileId);
+        const canReuse = p.sourceIndex === undefined && !needsPixels(p) && p.rotation === 0 && p.fineRotation === 0 && p.scale === 1
+          && !watermarkText && !addPageNumbers && signatures.length === 0 && !(enableCompression && raster);
+        const originalBytes = imageSource?.bytes;
+        const originalJpeg = originalBytes?.[0] === 0xff && originalBytes?.[1] === 0xd8;
+        const originalPng = originalBytes?.[0] === 0x89 && originalBytes?.[1] === 0x50;
+        const image = canReuse && originalBytes && (originalJpeg || originalPng)
+          ? await (originalJpeg ? pdf.embedJpg(originalBytes) : pdf.embedPng(originalBytes))
+          : enableCompression && raster
+            ? await pdf.embedJpg(canvas.toDataURL('image/jpeg', compressionQuality / 100))
+            : await pdf.embedPng(canvas.toDataURL('image/png'));
+        pdf.addPage([width, height]).drawImage(image, { x: 0, y: 0, width, height });
+        canvas.width = 0; canvas.height = 0;
+      }
+    }
+    const bytes = await pdf.save({ useObjectStreams: true, objectsPerTick: 25 });
+    let blob = new Blob([Uint8Array.from(bytes).buffer], { type: 'application/pdf' });
+    // An untouched single document may already be smaller. Never discard requested edits.
+    const first = pagesToExport[0]; const source = sources.current.get(first.fileId);
+    const unchanged = source?.pdf && pagesToExport.length === source.pdf.numPages && pagesToExport.every((p, i) =>
+      p.fileId === first.fileId && p.sourceIndex === i && !needsPixels(p) && p.rotation === 0 && p.fineRotation === 0 && p.scale === 1)
+      && !watermarkText && !addPageNumbers && signatures.length === 0 && !raster;
+    if (unchanged && source && source.size <= blob.size) blob = new Blob([Uint8Array.from(source.bytes).buffer], { type: 'application/pdf' });
+    if (!preserveForOffice && pagesToExport === pages) exportCache.current = { key: settingsKey, blob };
+    return blob;
+  };
+
+  const measureOutput = async () => {
+    if (busyRef.current || !pages.length) return;
+    busyRef.current = true; setMeasuring(true); setIsProcessing(true);
+    try {
+      const blob = await generatePdfBlob();
+      if (blob) {
+        setPdfSize({ key: settingsKey, bytes: blob.size });
+        setPdfSize({ key: settingsKey, bytes: blob.size });
+        setOutputInfo({ key: operationKey, bytes: blob.size, name: 'PDF' });
+      }
+    } catch (e) { alert(errorText(e)); }
+    finally { busyRef.current = false; setMeasuring(false); setIsProcessing(false); setLoadingText(''); }
+  };
 
   const exportAsPdf = async () => {
     setIsProcessing(true)
@@ -1374,16 +1490,13 @@ export default function PdfEditor() {
     try {
       const blob = await generatePdfBlob()
       if (blob) {
-        const url = URL.createObjectURL(blob)
-        const link = document.createElement('a')
-        link.href = url
-        link.download = `${originalDocName}_zs_converter.pdf`
-        link.click()
-        URL.revokeObjectURL(url)
+        setPdfSize({ key: settingsKey, bytes: blob.size });
+        setOutputInfo({ key: operationKey, bytes: blob.size, name: 'PDF' })
+        saveBlob(blob, `${originalDocName}_zs_converter.pdf`)
         showToast('PDF exported successfully')
       }
     } catch (e) {
-      alert("PDF export failed.")
+      alert(errorText(e))
     } finally {
       setIsProcessing(false)
       setLoadingText('')
@@ -1406,12 +1519,8 @@ export default function PdfEditor() {
       }
 
       const zipContent = await zip.generateAsync({ type: 'blob' })
-      const url = URL.createObjectURL(zipContent)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `${originalDocName}_images_zs_converter.zip`
-      link.click()
-      URL.revokeObjectURL(url)
+      setOutputInfo({ key: operationKey, bytes: zipContent.size, name: 'ZIP' });
+      saveBlob(zipContent, `${originalDocName}_images_zs_converter.zip`);
       showToast('Image archive exported')
     } catch (e) {
       alert("Image export failed.")
@@ -1421,37 +1530,32 @@ export default function PdfEditor() {
     }
   }
 
-  const exportAsWord = async () => {
-    setIsProcessing(true)
-    setLoadingText('Building Word Document...')
-    await new Promise(r => setTimeout(r, 50))
+  const exportAsOffice = async (format: 'docx' | 'xlsx') => {
+    setIsProcessing(true); setConversionReport(null); setLoadingText('Preparing PDF for local conversion…');
+    const controller = new AbortController(); officeAbort.current = controller;
+    let document: PDFDocumentProxy | undefined;
     try {
-      let htmlContent = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
-      <head><meta charset='utf-8'><title>Exported Doc</title></head><body>`
-      
-      for (let i = 0; i < pages.length; i++) {
-        const canvas = await renderPageToCanvas(pages[i], i, false)
-        if(!canvas) continue
-        
-        const b64 = canvas.toDataURL('image/jpeg', 0.85)
-        htmlContent += `<img src="${b64}" style="width:100%; max-width:800px; page-break-after:always; display:block; margin-bottom:20px;" />`
-      }
-      
-      htmlContent += `</body></html>`
-      
-      const blob = new Blob(['\ufeff', htmlContent], { type: 'application/msword' })
-      const link = document.createElement('a')
-      link.href = URL.createObjectURL(blob)
-      link.download = `${originalDocName}_zs_converter.doc`
-      link.click()
-      showToast('Word document exported')
-    } catch(e) {
-      alert("Word export failed.")
+      if (pages.some(p => p.sourceIndex === undefined)) throw new Error('Image uploads need OCR before editable conversion. This converter does not disguise images as editable text.');
+      const blob = await generatePdfBlob(pages, true);
+      if (!blob) return;
+      const [{ convertPdfToOffice }, pdfjs] = await Promise.all([import('./pdfOffice'), loadPdfJs()]);
+      document = await pdfjs.getDocument({ ...pdfAssets, data: new Uint8Array(await blob.arrayBuffer()) }).promise;
+      const result = await convertPdfToOffice(document, {
+        format, numericCells, includeReferences, signal: controller.signal, onProgress: setLoadingText,
+      });
+      if (controller.signal.aborted) throw new Error('Conversion cancelled.');
+      setOutputInfo({ key: operationKey, bytes: result.blob.size, name: format.toUpperCase() });
+      setConversionReport({ key: operationKey, messages: [
+        `Converted ${result.pages} pages and ${result.textItems} editable text items locally.`, ...result.warnings,
+      ] });
+      saveBlob(result.blob, `${originalDocName}_editable.${format}`);
+      showToast(`Editable ${format.toUpperCase()} ready — ${formatBytes(result.blob.size)}`);
+    } catch (e) {
+      const message = errorText(e); setConversionReport({ key: operationKey, messages: [message] }); alert(message);
     } finally {
-      setIsProcessing(false)
-      setLoadingText('')
+      await document?.destroy(); officeAbort.current = null; setIsProcessing(false); setLoadingText('');
     }
-  }
+  };
 
   const handleSplitPdf = async () => {
     if (!splitRanges.trim()) return alert("Please enter valid page ranges (e.g., 1-3, 5).")
@@ -1461,6 +1565,9 @@ export default function PdfEditor() {
     await new Promise(r => setTimeout(r, 50))
     try {
       const ranges = splitRanges.split(',').map(r => r.trim())
+      if (ranges.some(range => !/^\d+(?:-\d+)?$/.test(range) || range.split('-').some(n => Number(n) < 1 || Number(n) > pages.length))) {
+        throw new Error(`Use page numbers from 1 to ${pages.length}, for example 1-3,5. No ranges were exported.`);
+      }
       const zip = new JSZip()
       
       for (let i = 0; i < ranges.length; i++) {
@@ -1492,23 +1599,26 @@ export default function PdfEditor() {
       }
       
       const zipContent = await zip.generateAsync({ type: 'blob' })
-      const link = document.createElement('a')
-      link.href = URL.createObjectURL(zipContent)
-      link.download = `${originalDocName}_splits_zs_converter.zip`
-      link.click()
+      saveBlob(zipContent, `${originalDocName}_splits_zs_converter.zip`);
+      showToast(`Split archive: ${formatBytes(zipContent.size)}`);
       showToast('Split PDF downloaded')
     } catch (e) {
-      alert("Split operation failed. Please check your range formatting.")
+      alert(errorText(e))
     } finally {
       setIsProcessing(false)
       setLoadingText('')
     }
   }
 
-  const handleMainExport = () => {
-    if (exportFormat === 'pdf') exportAsPdf()
-    else if (exportFormat === 'images') exportAsImages()
-    else if (exportFormat === 'word') exportAsWord()
+  const handleMainExport = async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    try {
+      if (exportFormat === 'pdf') await exportAsPdf();
+      else if (exportFormat === 'images') await exportAsImages();
+      else if (exportFormat === 'word') await exportAsOffice('docx');
+      else if (exportFormat === 'excel') await exportAsOffice('xlsx');
+    } finally { busyRef.current = false; }
   }
 
   // 9. Render Helpers
@@ -1933,7 +2043,7 @@ export default function PdfEditor() {
         <input type="checkbox" checked={cleanWatermarks} onChange={(e) => { setCleanWatermarks(e.target.checked); showToast(e.target.checked ? 'Global scan cleaner enabled' : 'Global scan cleaner disabled'); }} className="w-4 h-4 mt-0.5 accent-[#6384A3] rounded" />
         <div>
           <span className="uppercase tracking-wider">Remove Faint Watermarks</span>
-          <p className="text-[9px] text-slate-400 font-normal mt-1 leading-tight">Washes out light colors, shadows, and faint watermarks while preserving dark text for scanned documents globally.</p>
+          <p className="text-[9px] text-slate-400 font-normal mt-1 leading-tight">Destructive pixel cleanup: can erase faint text, decimals and graphics. Inspect every result. Requires image mode for PDF output.</p>
         </div>
       </label>
       <p className="text-[10px] text-[#6384A3] font-bold mt-2 pt-2 border-t border-slate-100">Pro Tip: Use 'Page Settings' for local AI background removal.</p>
@@ -1944,15 +2054,15 @@ export default function PdfEditor() {
     <div className="space-y-4">
       <div className="space-y-2">
         <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-          <Unlock className="w-3 h-3" /> Unlock PDF
+          <Unlock className="w-3 h-3" /> Password for preview only
         </label>
         <input type="password" placeholder="Required for locked PDFs" value={unlockPassword} onChange={(e) => setUnlockPassword(e.target.value)} className="w-full p-2 border border-slate-200 rounded text-sm bg-white" />
       </div>
       <div className="space-y-2 pt-2 border-t border-slate-50">
         <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-          <Lock className="w-3 h-3" /> Encrypt Output
+          <Lock className="w-3 h-3" /> Encryption unavailable in this engine
         </label>
-        <input type="password" placeholder="Set a new password (optional)" value={encryptPassword} onChange={(e) => setEncryptPassword(e.target.value)} className="w-full p-2 border border-slate-200 rounded text-sm bg-white" />
+        <input type="password" placeholder="Unsupported — leave empty" disabled value={encryptPassword} onChange={(e) => setEncryptPassword(e.target.value)} className="w-full p-2 border border-slate-200 rounded text-sm bg-white" />
       </div>
     </div>
   )
@@ -1992,98 +2102,78 @@ export default function PdfEditor() {
     </div>
   )
 
-  const renderCompressionControls = () => (
-    <div className="space-y-4">
-      <label className="flex items-center gap-2 text-xs font-bold text-slate-700 uppercase tracking-wider cursor-pointer">
-        <input type="checkbox" checked={enableCompression} onChange={(e) => setEnableCompression(e.target.checked)} className="w-4 h-4 accent-[#6384A3] rounded" />
-        Force File Shrink
-      </label>
-      {enableCompression ? (
-        <div className="space-y-3 animate-in fade-in pt-2 border-t border-slate-100 mt-2">
-          <div className="space-y-1">
-            <div className="flex justify-between text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-              <span>JPEG Quality</span>
-              <span className="text-[#6384A3]">{compressionQuality}%</span>
-            </div>
-            <input type="range" min="10" max="100" value={compressionQuality} onChange={(e) => setCompressionQuality(Number(e.target.value))} className="w-full accent-[#6384A3]" />
-          </div>
-          
-          <div className="space-y-1 pt-1">
-            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">Max Resolution (PPI)</label>
-            <CustomDropdown 
-              value={ppiMode} 
-              onChange={(val) => setPpiMode(val)} 
-              direction="up"
-              options={[
-                { value: '72', label: '72 PPI (Web / Smallest)' },
-                { value: '150', label: '150 PPI (Medium)' },
-                { value: '300', label: '300 PPI (Print / High)' },
-                { value: '0', label: 'Original Resolution' },
-                { value: 'custom', label: 'Custom PPI Range' }
-              ]} 
-            />
-            {ppiMode === 'custom' && (
-              <div className="space-y-1 mt-3 p-2 bg-slate-50 border border-slate-100 rounded">
-                <div className="flex justify-between text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                  <span>Custom PPI</span>
-                  <span className="text-[#6384A3]">{customPPI} PPI</span>
-                </div>
-                <input 
-                  type="range" 
-                  min="10" 
-                  max="1200" 
-                  value={customPPI} 
-                  onChange={(e) => setCustomPPI(Number(e.target.value))} 
-                  className="w-full accent-[#6384A3]" 
-                />
-              </div>
-            )}
-          </div>
-
-          <div className="pt-1">
-            <label className="flex items-center gap-2 text-[10px] font-bold text-slate-600 uppercase tracking-widest cursor-pointer">
-              <input 
-                type="checkbox" 
-                checked={compressionGrayscale} 
-                onChange={(e) => setCompressionGrayscale(e.target.checked)} 
-                className="w-3.5 h-3.5 accent-[#6384A3] rounded cursor-pointer" 
-              />
-              Convert to Grayscale
+  const renderCompressionControls = () => {
+    const originalBytes = [...new Set(pages.map(p => p.fileId))].reduce((sum, id) => sum + (sources.current.get(id)?.size ?? 0), 0);
+    const actualBytes = pdfSize?.key === settingsKey ? pdfSize.bytes : null;
+    const change = actualBytes !== null && originalBytes > 0 ? (originalBytes - actualBytes) / originalBytes * 100 : null;
+    const compactSize = (bytes: number) => bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1048576).toFixed(2)} MB`;
+    const sourcesHaveAllPages = [...new Set(pages.map(p => p.fileId))].every(id => {
+      const source = sources.current.get(id);
+      return !source?.pdf || pages.filter(p => p.fileId === id).length === source.pdf.numPages;
+    });
+    return (
+      <div className="space-y-4" data-testid="compression-panel">
+        <fieldset className="space-y-2" disabled={isProcessing}>
+          <legend className="mb-2 text-xs font-semibold text-slate-600">Compression method</legend>
+          {([
+            { value: 'image', label: 'Convert to image & compress', help: 'Text will no longer be selectable.' },
+            { value: 'preserve', label: 'Only compress', help: 'Keep text and quality. Savings vary.' },
+          ] as const).map(option => (
+            <label key={option.value} className={`flex cursor-pointer items-start gap-2.5 rounded-lg border p-3 transition-colors ${compressionMode === option.value ? 'border-[#6384A3] bg-[#6384A3]/10' : 'border-slate-200 bg-white hover:border-slate-300'}`}>
+              <input type="radio" name="pdf-compression-method" value={option.value} checked={compressionMode === option.value} onChange={() => setCompressionMode(option.value)} className="mt-0.5 h-4 w-4 shrink-0 accent-[#6384A3]" />
+              <span><span className="block text-sm font-semibold leading-snug text-slate-800">{option.label}</span><span className="mt-1 block text-xs leading-snug text-slate-500">{option.help}</span></span>
             </label>
+          ))}
+        </fieldset>
+        {allowRaster && <fieldset disabled={isProcessing}>
+          <legend className="mb-2 text-xs font-semibold text-slate-600">Compression level</legend>
+          <div className="grid grid-cols-3 gap-2">
+            {(['low', 'medium', 'high'] as const).map(level => (
+              <label key={level} className={`cursor-pointer rounded-md border px-2 py-2 text-center text-sm ${compressionLevel === level ? 'border-[#6384A3] bg-[#6384A3] font-semibold text-white' : 'border-slate-200 bg-white text-slate-600'}`}>
+                <input className="sr-only" type="radio" name="pdf-compression-level" value={level} checked={compressionLevel === level} onChange={() => setCompressionLevel(level)} />
+                {level[0].toUpperCase() + level.slice(1)}
+              </label>
+            ))}
           </div>
-          <p className="text-[9px] text-slate-400 leading-tight">These settings apply to PDF exports to significantly reduce file size.</p>
+          <p className="mt-2 text-xs text-slate-500">{compressionPresets[compressionLevel].hint}</p>
+        </fieldset>}
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3" aria-live="polite">
+          <dl className="grid grid-cols-2 gap-3 text-sm">
+            <div><dt className="text-xs text-slate-500">Original files</dt><dd data-testid="compression-original" className="mt-1 font-semibold text-slate-800" title={`${originalBytes.toLocaleString()} bytes`}>{compactSize(originalBytes)}</dd></div>
+            <div><dt className="text-xs text-slate-500">Output PDF</dt><dd data-testid="compression-output" className="mt-1 font-semibold text-slate-800" title={actualBytes !== null ? `${actualBytes.toLocaleString()} bytes` : undefined}>{actualBytes !== null ? compactSize(actualBytes) : 'Not calculated'}</dd></div>
+          </dl>
+          {change !== null && <p data-testid="compression-change" className={`mt-2 text-xs font-semibold ${change < 0 ? 'text-amber-700' : 'text-emerald-700'}`}>{change < 0 ? `${Math.abs(change) < 0.1 ? '<0.1' : Math.abs(change).toFixed(1)}% larger` : change === 0 ? 'Same size' : `${change < 0.1 ? '<0.1' : change.toFixed(1)}% smaller`}</p>}
+          {!sourcesHaveAllPages && <p className="mt-2 text-xs text-slate-500">Compared with full original files, including removed pages.</p>}
         </div>
-      ) : (
-        <p className="text-[10px] text-slate-500">Currently exporting visually lossless JPEGs for optimal quality/size balance.</p>
-      )}
-
-      {/* Size Estimator */}
-      {estimatedSizes && (
-        <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-2 gap-2 text-center animate-in fade-in">
-          <div className="bg-slate-50 p-2 rounded border border-slate-200">
-            <span className="block text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Current Size</span>
-            <span className="text-xs font-bold text-slate-700">{estimatedSizes.original}</span>
-          </div>
-          <div className="bg-blue-50 p-2 rounded border border-blue-100">
-            <span className="block text-[9px] font-bold text-blue-500 uppercase tracking-widest mb-1">Output Est.</span>
-            <span className="text-xs font-bold text-blue-700">{estimatedSizes.compressed}</span>
-          </div>
-        </div>
-      )}
-    </div>
-  )
+        <button type="button" disabled={isProcessing || !pages.length} onClick={measureOutput} className="w-full rounded-lg bg-[#6384A3] px-3 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#4f6a83] disabled:opacity-50">{measuring ? 'Calculating…' : 'Calculate size'}</button>
+      </div>
+    );
+  };
 
   const renderExportControls = () => (
     <div className="space-y-4">
       <div className="space-y-2">
         <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Main Export Format</label>
+        {(exportFormat === 'word' || exportFormat === 'excel') && <div className="space-y-3 text-sm text-slate-700">
+          <p className="font-semibold">Local conversion · No account or API key · No document upload</p>
+          <p>{exportFormat === 'word'
+            ? 'Rebuilds editable text at its page positions and retains graphics separately. Fonts and spacing can differ; check the result. Scanned, rotated or unsupported text is reported.'
+            : 'Rebuilds editable rows and columns from PDF text positions. Table borders, formulas and complex designs cannot be reproduced exactly.'}</p>
+          {exportFormat === 'excel' && <>
+            <label className="flex gap-2"><input type="checkbox" checked={numericCells} onChange={e => setNumericCells(e.target.checked)} />Convert simple numbers to numeric cells. Keep IDs and ambiguous values as text.</label>
+            <label className="flex gap-2"><input type="checkbox" checked={includeReferences} onChange={e => setIncludeReferences(e.target.checked)} />Include separate original-page reference sheets for comparison.</label>
+          </>}
+          {conversionReport?.key === operationKey && <div role="status" className="rounded border bg-slate-50 p-2 text-xs space-y-2">{conversionReport.messages.map((message, i) => <p key={i}>{message}</p>)}</div>}
+          {outputInfo?.key === operationKey && <p className="font-semibold">Actual output: {formatBytes(outputInfo.bytes)}</p>}
+        </div>}
         <CustomDropdown 
           value={exportFormat} 
           onChange={setExportFormat} 
           direction="up"
           options={[
             { value: 'pdf', label: 'PDF Document (.pdf)' },
-            { value: 'word', label: 'Word Document (.doc)' },
+            { value: 'word', label: 'Editable Word (.docx)' },
+            { value: 'excel', label: 'Editable Excel (.xlsx)' },
             { value: 'images', label: 'Image Archive (.zip)' },
           ]} 
         />
@@ -2104,7 +2194,7 @@ export default function PdfEditor() {
         {!isForFullscreen && renderAccordion('security', 'Security & Passwords', <ShieldCheck className="w-4 h-4 text-[#6384A3]"/>, renderSecurityControls())}
         
         {renderAccordion('overlays', 'Text Overlays', <Type className="w-4 h-4 text-[#6384A3]"/>, renderOverlayControls())}
-        {renderAccordion('compression', 'Doc Compression', <SlidersHorizontal className="w-4 h-4 text-[#6384A3]"/>, renderCompressionControls())}
+        {renderAccordion('compression', 'PDF Compression', <SlidersHorizontal className="w-4 h-4 text-[#6384A3]"/>, renderCompressionControls())}
         {!isForFullscreen && renderAccordion('export', 'Format & Export', <Download className="w-4 h-4 text-[#6384A3]"/>, renderExportControls())}
       </div>
     )
@@ -2635,6 +2725,7 @@ export default function PdfEditor() {
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
             </svg>
             <p className="text-xs font-bold text-slate-800 uppercase tracking-widest">{loadingText}</p>
+            {officeAbort.current && <button type="button" className="mt-3 rounded border px-3 py-1 text-sm" onClick={() => { officeAbort.current?.abort(); setLoadingText('Cancelling after the current page…'); }}>Cancel conversion</button>}
           </div>
         </div>
       )}

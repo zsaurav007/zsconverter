@@ -1,0 +1,25 @@
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict'),Module=require('node:module'),ts=require('typescript'),JSZip=require('jszip'),Excel=require('exceljs');
+const code=ts.transpileModule(fs.readFileSync('pdfOffice.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;
+const mod=new Module(path.resolve('office-test.cjs'),module);mod.filename=path.resolve('office-test.cjs');mod.paths=module.paths;mod._compile(code,mod.filename);
+const {excelValue,groupRows,writeWord,writeExcel}=mod.exports;
+const options={format:'docx',numericCells:true,includeReferences:false,onProgress:()=>{}};
+const span=(text,x,y)=>({text,x,y,width:100,height:12,fontSize:12,font:'Arial',bold:false,italic:false,color:'000000'});
+(async()=>{
+ for(const text of ['00123','12345678901234567','=SUM(A1:A2)','12,345','1e4','-0']) assert.equal(excelValue(text,true).value,text);
+ assert.deepEqual(excelValue('130.00',true),{value:130,format:'0.00'});
+ assert.equal(excelValue('12345.67',false).value,'12345.67');
+ const spans=[span('Code',40,40),span('Amount',260,40),span('00123',40,70),span('12345.67',260,70)];
+ const rows=groupRows(spans);assert.equal(rows.length,2);assert.equal(rows[0].cells.length,2);
+ const pages=[{width:595.28,height:841.89,spans},{width:595.28,height:841.89,spans:[span('PAGE TWO',40,40)]}];
+ const docx=await writeWord(pages,options);const zip=await JSZip.loadAsync(await docx.arrayBuffer());
+ const xml=await zip.file('word/document.xml').async('string');
+ for(const text of ['00123','12345.67','PAGE TWO'])assert(xml.includes(text));
+ assert.equal((xml.match(/<w:framePr /g)||[]).length,5);
+ assert.equal((xml.match(/<w:sectPr>/g)||[]).length,2);
+ const xlsx=await writeExcel(pages,{...options,format:'xlsx'});const wb=new Excel.Workbook();await wb.xlsx.load(await xlsx.arrayBuffer());
+ const values=[];wb.getWorksheet('Page 1').eachRow(r=>r.eachCell(c=>{if(c.type!==Excel.ValueType.Merge)values.push(c.value);}));
+ assert(values.includes('00123'));assert(values.includes(12345.67));
+ const controller=new AbortController();controller.abort();
+ await assert.rejects(writeWord(pages,{...options,signal:controller.signal}),/cancelled/);
+ console.log('PASS: native DOCX text/frames/sections; native XLSX cells; leading-zero and long-ID preservation; decimal formatting; formula strings; grouping; cancellation.');
+})();
