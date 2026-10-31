@@ -40,7 +40,6 @@ export default function Home() {
     { value: 'image', label: 'Single Image' },
     { value: 'batch', label: 'Batch Processor' },
     { value: 'pdf', label: 'PDF Tools' },
-    { value: 'pdfToExcel', label: 'PDF to Excel' },
     { value: 'bijoy', label: 'Unicode / Bijoy' },
     { value: 'converter', label: 'Converter' },
     { value: 'ai', label: 'AI Converter' },
@@ -95,7 +94,7 @@ export default function Home() {
                 onClick={() => setAppMode('batch')} 
                 className={`flex-shrink-0 px-4 py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'batch' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
               >
-                Batch Processor
+                Multiple Images
               </button>
               <button 
                 onClick={() => setAppMode('pdf')} 
@@ -103,12 +102,7 @@ export default function Home() {
               >
                 PDF Tools
               </button>
-              <button 
-                onClick={() => setAppMode('pdfToExcel')} 
-                className={`flex-shrink-0 px-4 py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'pdfToExcel' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-              >
-                PDF to Excel
-              </button>
+
               <button 
                 onClick={() => setAppMode('bijoy')} 
                 className={`flex-shrink-0 px-4 py-2 text-xs font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap ${appMode === 'bijoy' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
